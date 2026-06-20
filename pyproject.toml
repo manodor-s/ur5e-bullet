@@ -1,0 +1,20 @@
+[project]
+name = "ur5e-bullet"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Manuel Stoeth",email = "manuel.stoeth@study.thws.de"}
+]
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "numpy (>=2.4.6,<3.0.0)",
+    "pybullet (>=3.2.7,<4.0.0)",
+]
+
+[tool.poetry]
+packages = [{include = "ur5e_bullet", from = "src"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
