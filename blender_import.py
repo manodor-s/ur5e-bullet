@@ -64,12 +64,12 @@ def add_end_effector_track(data):
 
 
 JOINT_AXIS = {
-    "shoulder_pan_joint": 2,  # Z
-    "shoulder_lift_joint": 1,  # Y
-    "elbow_joint": 1,          # Y
-    "wrist_1_joint": 1,        # Y
-    "wrist_2_joint": 2,        # Z
-    "wrist_3_joint": 1,        # Y
+    "shoulder_pan_joint": 1,  # Y
+    "shoulder_lift_joint": 1,  # Z
+    "elbow_joint": 1,          # Z
+    "wrist_1_joint": 1,        # Z
+    "wrist_2_joint": 1,        # Y
+    "wrist_3_joint": 1,        # Z
 }
 
 
