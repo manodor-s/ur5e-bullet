@@ -4,8 +4,8 @@ import os
 import json
 from mathutils import Vector, Euler, Matrix
 
-POSE_JSON = "/tmp/ur5e_obj/urdf_data.json"
-OBJ_DIR = "/tmp/ur5e_obj"
+POSE_JSON = "/home/data/Python-Projekte/ur5e-bullet/urdf_data.json"
+OBJ_DIR = "/home/data/Python-Projekte/ur5e-bullet/src/ur5e_bullet/ur_e_description/meshes/ur5e/visual"
 
 # Per-Mesh-Rotation (Euler XYZ radians) um die OBJ-Geometrie an die
 # URDF-Link-Orientierung anzupassen. Nach dem Import wird rotation applied.
