@@ -4,11 +4,15 @@ import os
 import json
 from mathutils import Vector, Euler, Matrix
 
-POSE_JSON = "/home/data/Python-Projekte/ur5e-bullet/urdf_data.json"
-OBJ_DIR = "/home/data/Python-Projekte/ur5e-bullet/src/ur5e_bullet/ur_e_description/meshes/ur5e/visual"
+try:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(bpy.context.space_data.text.filepath))
 
-# Per-Mesh-Rotation (Euler XYZ radians) um die OBJ-Geometrie an die
-# URDF-Link-Orientierung anzupassen. Nach dem Import wird rotation applied.
+ROOT = os.path.dirname(SCRIPT_DIR)
+POSE_JSON = os.path.join(ROOT, "data", "urdf_data.json")
+OBJ_DIR = os.path.join(ROOT, "data", "meshes")
+
 MESH_ROTATIONS = {
     "base_link": (math.radians(90), 0, 0),
     "shoulder_link": (0, 0, 0),
@@ -19,7 +23,6 @@ MESH_ROTATIONS = {
     "wrist_3_link": (math.radians(90), 0, 0),
 }
 
-# Location-Offset (x, y, z) in Bone-Local-Space nach dem Parenting.
 MESH_OFFSETS = {
     "base_link": (0, 0, 0),
     "shoulder_link": (0, -0.05, 0),
@@ -30,7 +33,6 @@ MESH_OFFSETS = {
     "wrist_3_link": (0, -0.05, 0),
 }
 
-# Joint axis in URDF: 0=X, 1=Y, 2=Z
 JOINT_AXIS_INDEX = {
     "shoulder_pan_joint": 2,
     "shoulder_lift_joint": 1,
@@ -40,7 +42,6 @@ JOINT_AXIS_INDEX = {
     "wrist_3_joint": 1,
 }
 
-# Bone hierarchy (parent joint name)
 JOINT_PARENT = {
     "shoulder_pan_joint": None,
     "shoulder_lift_joint": "shoulder_pan_joint",
@@ -196,7 +197,7 @@ def main():
 
     bpy.context.scene.frame_set(1)
     print("\nFertig! UR5e riggt.")
-    print("Animation: blender_import.py im Scripting-Tab oeffnen und Run Script")
+    print("Animation: blender/animate.py im Scripting-Tab oeffnen und Run Script")
 
 
 if __name__ == "__main__":

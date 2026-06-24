@@ -16,7 +16,8 @@ class AttrDict(dict):
     def __delattr__(self, key):
         del self[key]
 
-ROBOT_URDF_PATH = "/home/data/Python-Projekte/ur5e-bullet/src/ur5e_bullet/ur_e_description/urdf/ur5e.urdf"
+_PKG_DIR = os.path.dirname(os.path.abspath(__file__))
+ROBOT_URDF_PATH = os.path.join(_PKG_DIR, "ur_e_description", "urdf", "ur5e.urdf")
 TABLE_URDF_PATH = os.path.join(pybullet_data.getDataPath(), "table/table.urdf")
 
 class UR5Sim():
@@ -181,8 +182,9 @@ def demo_simulation():
         sim.check_collisions()
 
 
-def record_demo_simulation(export_path="recorded_poses.json"):
-    """ Record joint poses via sliders and export to JSON for Blender import. """
+def record_demo_simulation(export_path=None):
+    if export_path is None:
+        export_path = os.path.join(os.path.dirname(_PKG_DIR), "..", "data", "poses.json")
     export_path = os.path.abspath(export_path)
     sim = None
     try:

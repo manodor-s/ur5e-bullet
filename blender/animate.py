@@ -1,21 +1,3 @@
-"""
-Usage in Blender:
-    # Nur End-Effector-Trajektorie (leere Szene):
-    blender --python blender_import.py -- --json recorded_poses.json
-
-    # UR5 mit LinkForge importieren + Gelenk-Keyframes setzen:
-    blender --python blender_import.py -- --json recorded_poses.json --linkforge
-
-Der --linkforge-Modus setzt voraus, dass die URDF bereits via LinkForge
-importiert wurde. Er sucht nach Empty-Objekten mit Gelenk-Namen aus der
-Aufnahme und keyframed deren Z-Rotation.
-
-    blender --python blender_import.py -- --json recorded_poses.json --armature
-
-Der --armature-Modus keyframed Pose-Bones einer bestehenden Armature
-(alternativer URDF-Import via urdf_importer-addon o.ä.).
-"""
-
 import json
 import os
 import sys
@@ -34,7 +16,6 @@ def clear_scene():
 
 
 def add_end_effector_track(data):
-    """Erzeugt einen Empty mit Location/Rotation-Keyframes."""
     fps = data["fps"]
     frames = data["frames"]
     scene = bpy.context.scene
@@ -64,12 +45,12 @@ def add_end_effector_track(data):
 
 
 JOINT_AXIS = {
-    "shoulder_pan_joint": 1,  # Y
-    "shoulder_lift_joint": 1,  # Y
-    "elbow_joint": 1,          # Y
-    "wrist_1_joint": 1,        # Y
-    "wrist_2_joint": 1,        # Y
-    "wrist_3_joint": 1,        # Y
+    "shoulder_pan_joint": 1,
+    "shoulder_lift_joint": 1,
+    "elbow_joint": 1,
+    "wrist_1_joint": 1,
+    "wrist_2_joint": 1,
+    "wrist_3_joint": 1,
 }
 
 
@@ -80,7 +61,6 @@ def _set_rotation(obj_or_bone, angle, axis):
 
 
 def keyframe_linkforge_joints(data):
-    """Keyframed LinkForge-Joint-Empties."""
     control_joints = data["control_joints"]
     frames = data["frames"]
     scene = bpy.context.scene
@@ -111,7 +91,6 @@ def keyframe_linkforge_joints(data):
 
 
 def keyframe_armature_joints(data):
-    """Keyframed Pose-Bones einer Armature."""
     control_joints = data["control_joints"]
     frames = data["frames"]
     scene = bpy.context.scene
@@ -153,6 +132,12 @@ def keyframe_armature_joints(data):
 
 
 if __name__ == "__main__":
+    try:
+        SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SCRIPT_DIR = os.path.dirname(os.path.abspath(bpy.context.space_data.text.filepath))
+    ROOT = os.path.dirname(SCRIPT_DIR)
+
     if "--" in sys.argv:
         idx = sys.argv.index("--")
         args = sys.argv[idx + 1:]
@@ -160,7 +145,7 @@ if __name__ == "__main__":
         args = []
 
     path = None
-    mode = "empty"  # empty | linkforge | armature
+    mode = "empty"
 
     for a in args:
         if a.startswith("--json="):
@@ -178,21 +163,17 @@ if __name__ == "__main__":
         path = args[0]
 
     if path is None:
-        PROJECT_DIR = "/home/data/Python-Projekte/ur5e-bullet"
         candidates = [
+            os.path.join(ROOT, "data", "poses.json"),
+            os.path.join(ROOT, "recorded_poses.json"),
+            bpy.path.abspath("//poses.json"),
             bpy.path.abspath("//recorded_poses.json"),
-            os.path.join(PROJECT_DIR, "recorded_poses.json"),
         ]
-        try:
-            candidates.append(os.path.join(os.path.dirname(__file__), "recorded_poses.json"))
-        except Exception:
-            pass
-        path = next((p for p in candidates if os.path.exists(p)), "recorded_poses.json")
+        path = next((p for p in candidates if os.path.exists(p)), "poses.json")
 
     if not os.path.exists(path):
         print(f"[Fehler: Datei nicht gefunden: {path}]")
-        print(f"[Pfad anpassen: --json=<absoluter-pfad-zu>/recorded_poses.json]")
-        print("[Oder: recorded_poses.json neben .blend-Datei legen]")
+        print(f"[Pfad anpassen: --json=<absoluter-pfad-zu>/poses.json]")
     else:
         data = load_poses(path)
         if mode == "empty":
