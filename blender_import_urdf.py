@@ -15,7 +15,7 @@ MESH_ROTATIONS = {
     "upper_arm_link": (math.radians(90), 0, 0),
     "forearm_link": (math.radians(90), 0, 0),
     "wrist_1_link": (math.radians(90), math.radians(90), 0),
-    "wrist_2_link": (0, 0, math.radians(180)),
+    "wrist_2_link": (0, math.radians(180), 0),
     "wrist_3_link": (math.radians(90), 0, 0),
 }
 
@@ -124,7 +124,10 @@ def create_armature(data):
         eb.head = Vector(pos)
 
         ax_idx = JOINT_AXIS_INDEX.get(name, 2)
-        if ax_idx == 2:
+        if name == "wrist_2_joint":
+            eb.tail = Vector(pos) + Vector((0, 0, -0.05))
+            eb.roll = 0.0
+        elif ax_idx == 2:
             eb.tail = Vector(pos) + Vector((0, 0, 0.05))
             eb.roll = 0.0
         else:
