@@ -131,11 +131,29 @@ def keyframe_armature_joints(data):
     print(f"[Armature-Keyframes: {len(frames)} Frames auf {len(found)} Bones]")
 
 
-if __name__ == "__main__":
+def _script_dir():
+    candidates = []
     try:
-        SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+        candidates.append(("space_data", bpy.context.space_data.text.filepath))
+    except (AttributeError, TypeError):
+        pass
+    try:
+        candidates.append(("__file__", __file__))
     except NameError:
-        SCRIPT_DIR = os.path.dirname(os.path.abspath(bpy.context.space_data.text.filepath))
+        pass
+    for txt in bpy.data.texts:
+        if txt.filepath:
+            candidates.append(("text", txt.filepath))
+    for label, fp in candidates:
+        if not fp:
+            continue
+        d = os.path.dirname(os.path.abspath(fp))
+        if os.path.isdir(os.path.join(d, "..", "data")):
+            return d
+    return os.path.abspath(".")
+
+if __name__ == "__main__":
+    SCRIPT_DIR = _script_dir()
     ROOT = os.path.dirname(SCRIPT_DIR)
 
     if "--" in sys.argv:

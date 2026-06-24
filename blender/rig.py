@@ -4,10 +4,28 @@ import os
 import json
 from mathutils import Vector, Euler, Matrix
 
-try:
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-except NameError:
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(bpy.context.space_data.text.filepath))
+def _script_dir():
+    candidates = []
+    try:
+        candidates.append(("space_data", bpy.context.space_data.text.filepath))
+    except (AttributeError, TypeError):
+        pass
+    try:
+        candidates.append(("__file__", __file__))
+    except NameError:
+        pass
+    for txt in bpy.data.texts:
+        if txt.filepath:
+            candidates.append(("text", txt.filepath))
+    for label, fp in candidates:
+        if not fp:
+            continue
+        d = os.path.dirname(os.path.abspath(fp))
+        if os.path.isdir(os.path.join(d, "..", "data")):
+            return d
+    return os.path.abspath(".")
+
+SCRIPT_DIR = _script_dir()
 
 ROOT = os.path.dirname(SCRIPT_DIR)
 POSE_JSON = os.path.join(ROOT, "data", "urdf_data.json")
