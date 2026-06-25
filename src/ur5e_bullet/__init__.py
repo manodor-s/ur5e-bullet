@@ -171,6 +171,35 @@ class UR5Sim():
         position, orientation = linkstate[0], linkstate[1]
         return (position, orientation)
 
+    def follow_path(self, waypoints, steps_between=50, sleep_each=0.005, dwell=1.0, home_pose=None):
+        all_targets = []
+        if home_pose is not None:
+            all_targets.append(home_pose)
+        all_targets.extend(waypoints)
+
+        for i, wp in enumerate(all_targets):
+            pos = wp.get("position")
+            ori = wp.get("orientation", [0, 0, 0])
+            joint_angles = self.calculate_ik(pos, ori)
+
+            if i > 0:
+                for t in range(steps_between):
+                    frac = (t + 1) / steps_between
+                    interp = [a + frac * (b - a) for a, b in zip(prev_joint_angles, joint_angles)]
+                    self.set_joint_angles(interp)
+                    self.record_frame()
+                    time.sleep(sleep_each)
+            else:
+                self.set_joint_angles(joint_angles)
+                self.record_frame()
+                time.sleep(sleep_each)
+
+            prev_joint_angles = joint_angles
+
+            for _ in range(int(dwell * self.fps)):
+                self.record_frame()
+                time.sleep(1 / self.fps)
+
 def demo_simulation():
     """ Demo program showing how to use the sim """
     sim = UR5Sim()
@@ -211,5 +240,20 @@ def record_demo_simulation(export_path=None):
             print(f"[Done: exported {len(sim.recorded_frames)} frames to {export_path}]", flush=True)
 
 
+def run_path_simulation(waypoints, export_path=None, home_pose=None):
+    if export_path is None:
+        export_path = os.path.join(os.path.dirname(_PKG_DIR), "..", "data", "poses.json")
+    export_path = os.path.abspath(export_path)
+    sim = UR5Sim()
+    sim.start_recording()
+    sim.follow_path(waypoints, home_pose=home_pose)
+    sim.export_json(export_path)
+    pybullet.disconnect()
+
 if __name__ == "__main__":
-    record_demo_simulation()
+    waypoints = [
+    {"position": [0.4, -0.3, 0.5], "orientation": [0, 0, 0]},
+    {"position": [0.4,  0.3, 0.5], "orientation": [0, 0, 0]},
+    {"position": [0.4, -0.3, 0.5], "orientation": [0, 0, 0]},
+    ]
+    run_path_simulation(waypoints)
