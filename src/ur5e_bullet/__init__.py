@@ -22,8 +22,8 @@ TABLE_URDF_PATH = os.path.join(pybullet_data.getDataPath(), "table/table.urdf")
 
 class UR5Sim():
   
-    def __init__(self, camera_attached=False):
-        pybullet.connect(pybullet.GUI)
+    def __init__(self, camera_attached=False, gui=True):
+        pybullet.connect(pybullet.GUI if gui else pybullet.DIRECT)
         pybullet.setRealTimeSimulation(True)
         
         self.end_effector_index = 7
@@ -171,30 +171,79 @@ class UR5Sim():
         position, orientation = linkstate[0], linkstate[1]
         return (position, orientation)
 
-    def follow_path(self, waypoints, steps_between=50, sleep_each=0.005, dwell=1.0, home_pose=None):
+    def _move_linear(self, start, end, steps_between, sleep_each, max_depth=3):
+        pos_a, ori_a = start["position"], start["orientation"]
+        pos_b, ori_b = end["position"], end["orientation"]
+
+        for t in range(1, steps_between + 1):
+            frac = t / steps_between
+            interp_pos = [a + frac * (b - a) for a, b in zip(pos_a, pos_b)]
+            interp_ori = [a + frac * (b - a) for a, b in zip(ori_a, ori_b)]
+            joint_angles = self.calculate_ik(interp_pos, interp_ori)
+            self.set_joint_angles(joint_angles)
+            actual_pos, _ = self.get_current_pose()
+            dx = actual_pos[0] - interp_pos[0]
+            dy = actual_pos[1] - interp_pos[1]
+            dz = actual_pos[2] - interp_pos[2]
+            err = math.sqrt(dx*dx + dy*dy + dz*dz)
+            if err > 0.01 and max_depth > 0:
+                mid_pos = [(a + b) / 2 for a, b in zip(pos_a, pos_b)]
+                mid_ori = [(a + b) / 2 for a, b in zip(ori_a, ori_b)]
+                mid = {"position": mid_pos, "orientation": mid_ori}
+                self._move_linear(start, mid, steps_between, sleep_each, max_depth - 1)
+                self._move_linear(mid, end, steps_between, sleep_each, max_depth - 1)
+                return
+            self.record_frame()
+            time.sleep(sleep_each)
+
+    def _move_joint(self, start_angles, end_angles, steps_between, sleep_each):
+        for t in range(1, steps_between + 1):
+            frac = t / steps_between
+            interp = [a + frac * (b - a) for a, b in zip(start_angles, end_angles)]
+            self.set_joint_angles(interp)
+            self.record_frame()
+            time.sleep(sleep_each)
+
+    def _move_axis_aligned(self, start, end, steps_per_segment, sleep_each):
+        pa = start["position"]
+        pb = end["position"]
+        ori = end.get("orientation", start.get("orientation", [0, 0, 0]))
+
+        mid_xy = {"position": [pb[0], pa[1], pa[2]], "orientation": ori}
+        mid_z  = {"position": [pb[0], pb[1], pa[2]], "orientation": ori}
+
+        for segment_start, segment_end in [(start, mid_xy), (mid_xy, mid_z), (mid_z, end)]:
+            if segment_start["position"] == segment_end["position"]:
+                continue
+            self._move_linear(segment_start, segment_end, steps_per_segment, sleep_each)
+
+    def follow_path(self, waypoints, steps_between=50, sleep_each=0.005, dwell=1.0, home_pose=None, linear=False, axis_aligned=True):
         all_targets = []
         if home_pose is not None:
             all_targets.append(home_pose)
         all_targets.extend(waypoints)
 
+        prev_angles = None
+        prev_target = None
+
         for i, wp in enumerate(all_targets):
             pos = wp.get("position")
             ori = wp.get("orientation", [0, 0, 0])
-            joint_angles = self.calculate_ik(pos, ori)
+            target_angles = self.calculate_ik(pos, ori)
 
-            if i > 0:
-                for t in range(steps_between):
-                    frac = (t + 1) / steps_between
-                    interp = [a + frac * (b - a) for a, b in zip(prev_joint_angles, joint_angles)]
-                    self.set_joint_angles(interp)
-                    self.record_frame()
-                    time.sleep(sleep_each)
-            else:
-                self.set_joint_angles(joint_angles)
+            if i == 0:
+                self.set_joint_angles(target_angles)
                 self.record_frame()
                 time.sleep(sleep_each)
+            elif axis_aligned:
+                self._move_axis_aligned(prev_target, wp, steps_between, sleep_each)
+            elif linear:
+                self._move_linear(prev_target, wp, steps_between, sleep_each)
+            else:
+                self._move_joint(prev_angles, target_angles, steps_between, sleep_each)
 
-            prev_joint_angles = joint_angles
+            prev_angles = target_angles
+            prev_target = wp
 
             for _ in range(int(dwell * self.fps)):
                 self.record_frame()
@@ -250,10 +299,67 @@ def run_path_simulation(waypoints, export_path=None, home_pose=None):
     sim.export_json(export_path)
     pybullet.disconnect()
 
+
+def record_workspace(num_positions=300, steps_between=30, export_path=None, fixed_wrist=None):
+    if export_path is None:
+        export_path = os.path.join(os.path.dirname(_PKG_DIR), "..", "data", "workspace.json")
+    export_path = os.path.abspath(export_path)
+    sim = UR5Sim(gui=False)
+
+    joint_ids = [1, 2, 3, 4, 5, 6]
+    joint_limits = {}
+    for joint in sim.joints.values():
+        if joint.controllable:
+            joint_limits[joint.name] = (joint.lowerLimit, joint.upperLimit)
+
+    sim.start_recording()
+    cur_angles = sim.get_joint_angles()
+    target_positions = []
+    expected_frames = num_positions * steps_between
+    print(f"[Start: {num_positions} Positionen x {steps_between} Schritte = {expected_frames} Frames]", flush=True)
+
+    for i in range(num_positions):
+        target = []
+        for jname in sim.control_joints:
+            if fixed_wrist and "wrist" in jname:
+                target.append(fixed_wrist.get(jname, 0.0))
+            else:
+                lo, hi = joint_limits[jname]
+                target.append(random.uniform(float(lo), float(hi)))
+
+        for t in range(1, steps_between + 1):
+            frac = t / steps_between
+            interp = [a + frac * (b - a) for a, b in zip(cur_angles, target)]
+            for idx, angle in zip(joint_ids, interp):
+                pybullet.resetJointState(sim.ur5, idx, angle)
+            sim.record_frame()
+
+        for idx, angle in zip(joint_ids, target):
+            pybullet.resetJointState(sim.ur5, idx, angle)
+        pos, _ = sim.get_current_pose()
+        target_positions.append([float(pos[0]), float(pos[1]), float(pos[2])])
+
+        if (i + 1) % 50 == 0:
+            print(f"  {i + 1}/{num_positions}", flush=True)
+
+        cur_angles = target
+
+    sim.fps = 60
+    print(f"[Frames aufgezeichnet: {len(sim.recorded_frames)}]", flush=True)
+    print(f"[Exportiere nach {export_path}]", flush=True)
+    data = {
+        "fps": sim.fps,
+        "num_frames": len(sim.recorded_frames),
+        "control_joints": sim.control_joints,
+        "frames": sim.recorded_frames,
+        "samples": target_positions,
+        "fixed_wrist": fixed_wrist,
+    }
+    with open(export_path, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"[Done: {len(sim.recorded_frames)} Frames, {len(target_positions)} Samples]", flush=True)
+    pybullet.disconnect()
+
+
 if __name__ == "__main__":
-    waypoints = [
-    {"position": [0.4, -0.3, 0.5], "orientation": [0, 0, 0]},
-    {"position": [0.4,  0.3, 0.5], "orientation": [0, 0, 0]},
-    {"position": [0.4, -0.3, 0.5], "orientation": [0, 0, 0]},
-    ]
-    run_path_simulation(waypoints)
+    record_workspace()
