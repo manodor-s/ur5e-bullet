@@ -133,23 +133,25 @@ class UR5Sim():
 
 
     def calculate_ik(self, position, orientation):
-        quaternion = pybullet.getQuaternionFromEuler(orientation)
-
-        if self.tool_offset_pos is not None:
-            ls = pybullet.getLinkState(self.ur5, self.end_effector_index, computeForwardKinematics=True)
-            R = np.array(pybullet.getMatrixFromQuaternion(ls[1])).reshape(3, 3)
-            offset_world = R @ np.array(self.tool_offset_pos)
-            position = [position[i] - offset_world[i] for i in range(3)]
-
+        quat_target = pybullet.getQuaternionFromEuler(orientation)
         lower_limits = [-math.pi]*6
         upper_limits = [math.pi]*6
         joint_ranges = [2*math.pi]*6
         rest_poses = [0, -math.pi/2, -math.pi/2, -math.pi/2, -math.pi/2, 0]
 
+        if self.tool_offset_pos is not None:
+            q_tool_inv = [self.tool_offset_orn[0], -self.tool_offset_orn[1],
+                          -self.tool_offset_orn[2], -self.tool_offset_orn[3]]
+            q_ee = pybullet.multiplyTransforms([0,0,0], quat_target, [0,0,0], q_tool_inv)[1]
+            R_ee = np.array(pybullet.getMatrixFromQuaternion(q_ee)).reshape(3, 3)
+            offset_world = R_ee @ np.array(self.tool_offset_pos)
+            position = [position[i] - offset_world[i] for i in range(3)]
+            quat_target = q_ee
+
         joint_angles = pybullet.calculateInverseKinematics(
-            self.ur5, self.end_effector_index, position, quaternion, 
-            jointDamping=[0.01]*6, upperLimits=upper_limits, 
-            lowerLimits=lower_limits, jointRanges=joint_ranges, 
+            self.ur5, self.end_effector_index, position, quat_target,
+            jointDamping=[0.01]*6, upperLimits=upper_limits,
+            lowerLimits=lower_limits, jointRanges=joint_ranges,
             restPoses=rest_poses
         )
         return joint_angles
@@ -209,7 +211,7 @@ class UR5Sim():
             interp_ori = [a + frac * (b - a) for a, b in zip(ori_a, ori_b)]
             joint_angles = self.calculate_ik(interp_pos, interp_ori)
             self.set_joint_angles(joint_angles)
-            actual_pos, _ = self.get_current_pose()
+            actual_pos, _ = self.get_tcp_pose()
             dx = actual_pos[0] - interp_pos[0]
             dy = actual_pos[1] - interp_pos[1]
             dz = actual_pos[2] - interp_pos[2]
@@ -285,9 +287,9 @@ def demo_simulation(tool_offset=None):
     sim.add_gui_sliders()
     while True:
         x, y, z, Rx, Ry, Rz = sim.read_gui_sliders()
-        ox = pybullet.readUserDebugParameter(sim.sliders[7])
-        oy = pybullet.readUserDebugParameter(sim.sliders[8])
-        oz = pybullet.readUserDebugParameter(sim.sliders[9])
+        ox = pybullet.readUserDebugParameter(sim.sliders[6])
+        oy = pybullet.readUserDebugParameter(sim.sliders[7])
+        oz = pybullet.readUserDebugParameter(sim.sliders[8])
         sim.set_tool_offset([ox, oy, oz])
         joint_angles = sim.calculate_ik([x, y, z], [Rx, Ry, Rz])
         sim.set_joint_angles(joint_angles)
