@@ -196,6 +196,43 @@ def parent_meshes(arm_obj, meshes, data):
         print(f"  + {link_name} -> {bone_name}")
 
 
+def add_scanner_and_camera(arm_obj, meshes):
+    scanner_path = os.path.join(OBJ_DIR, "rough_scanner.obj")
+    if not os.path.exists(scanner_path):
+        print("  - rough_scanner.obj nicht gefunden")
+        return
+
+    bpy.ops.wm.obj_import(filepath=scanner_path)
+    obj = bpy.context.active_object
+    if not obj or obj.type != "MESH":
+        print("  ! Scanner-Import fehlgeschlagen")
+        return
+
+    obj.name = "rough_scanner"
+    obj.rotation_euler = (math.radians(90), 0, 0)
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.transform_apply(rotation=True)
+
+    obj.parent = arm_obj
+    obj.parent_type = "BONE"
+    obj.parent_bone = "wrist_3_joint"
+    obj.matrix_parent_inverse = Matrix.Identity(4)
+    obj.location = Vector((0, 0.16, 0))
+    obj.rotation_euler = (0, math.pi, 0)
+    meshes["rough_scanner"] = obj
+    print("  + rough_scanner -> wrist_3_joint")
+
+    bpy.ops.object.camera_add()
+    cam = bpy.context.active_object
+    cam.name = "ScannerCamera"
+    cam.parent = obj
+    cam.matrix_parent_inverse = Matrix.Identity(4)
+    cam.location = Vector((0, 0.1, 0))
+    print("  + ScannerCamera -> rough_scanner (tip)")
+
+
 def main():
     clear_scene()
     print("Lade URDF-Daten...")
@@ -212,6 +249,9 @@ def main():
 
     print("Parente Meshes...")
     parent_meshes(arm_obj, meshes, data)
+
+    print("Fuege Scanner und Kamera hinzu...")
+    add_scanner_and_camera(arm_obj, meshes)
 
     bpy.context.scene.frame_set(1)
     print("\nFertig! UR5e riggt.")

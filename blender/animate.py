@@ -182,7 +182,6 @@ if __name__ == "__main__":
 
     if path is None:
         candidates = [
-            os.path.join(ROOT, "data", "workspace.json"),
             os.path.join(ROOT, "data", "poses.json"),
             os.path.join(ROOT, "recorded_poses.json"),
             bpy.path.abspath("//poses.json"),
