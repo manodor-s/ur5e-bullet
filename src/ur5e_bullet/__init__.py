@@ -54,6 +54,8 @@ class UR5Sim():
         self.recorded_frames = []
         self.fps = 60
         self._quit_slider = None
+        self.tool_offset_pos = None
+        self.tool_offset_orn = None
 
 
     def start_recording(self):
@@ -69,7 +71,7 @@ class UR5Sim():
         if not self.recording:
             return
         joint_angles = self.get_joint_angles()
-        pos, quat = self.get_current_pose()
+        pos, quat = self.get_tcp_pose()
         self.recorded_frames.append({
             "joint_angles": [float(a) for a in joint_angles],
             "end_effector_position": [float(p) for p in pos],
@@ -132,6 +134,13 @@ class UR5Sim():
 
     def calculate_ik(self, position, orientation):
         quaternion = pybullet.getQuaternionFromEuler(orientation)
+
+        if self.tool_offset_pos is not None:
+            ls = pybullet.getLinkState(self.ur5, self.end_effector_index, computeForwardKinematics=True)
+            R = np.array(pybullet.getMatrixFromQuaternion(ls[1])).reshape(3, 3)
+            offset_world = R @ np.array(self.tool_offset_pos)
+            position = [position[i] - offset_world[i] for i in range(3)]
+
         lower_limits = [-math.pi]*6
         upper_limits = [math.pi]*6
         joint_ranges = [2*math.pi]*6
@@ -148,12 +157,15 @@ class UR5Sim():
 
     def add_gui_sliders(self):
         self.sliders = []
-        self.sliders.append(pybullet.addUserDebugParameter("X", 0, 1, 0.4))
+        self.sliders.append(pybullet.addUserDebugParameter("X", 0, 1, 0.62))
         self.sliders.append(pybullet.addUserDebugParameter("Y", -1, 1, 0))
         self.sliders.append(pybullet.addUserDebugParameter("Z", 0.3, 1, 0.4))
         self.sliders.append(pybullet.addUserDebugParameter("Rx", -math.pi/2, math.pi/2, 0))
         self.sliders.append(pybullet.addUserDebugParameter("Ry", -math.pi/2, math.pi/2, 0))
         self.sliders.append(pybullet.addUserDebugParameter("Rz", -math.pi/2, math.pi/2, 0))
+        self.sliders.append(pybullet.addUserDebugParameter("Offset X", -0.5, 0.5, 0.22))
+        self.sliders.append(pybullet.addUserDebugParameter("Offset Y", -0.5, 0.5, 0))
+        self.sliders.append(pybullet.addUserDebugParameter("Offset Z", -0.5, 0.5, 0))
         self._quit_slider = pybullet.addUserDebugParameter("SAVE & QUIT (slide right)", 0, 1, 0)
 
 
@@ -170,6 +182,22 @@ class UR5Sim():
         linkstate = pybullet.getLinkState(self.ur5, self.end_effector_index, computeForwardKinematics=True)
         position, orientation = linkstate[0], linkstate[1]
         return (position, orientation)
+
+    def set_tool_offset(self, pos, ori=(0, 0, 0, 1)):
+        self.tool_offset_pos = list(pos)
+        self.tool_offset_orn = list(ori)
+
+    def clear_tool_offset(self):
+        self.tool_offset_pos = None
+        self.tool_offset_orn = None
+
+    def get_tcp_pose(self):
+        pos, quat = self.get_current_pose()
+        if self.tool_offset_pos is not None:
+            R = np.array(pybullet.getMatrixFromQuaternion(quat)).reshape(3, 3)
+            pos = [pos[i] + (R @ np.array(self.tool_offset_pos))[i] for i in range(3)]
+            quat = pybullet.multiplyTransforms([0,0,0], quat, self.tool_offset_pos, self.tool_offset_orn)[1]
+        return (pos, quat)
 
     def _move_linear(self, start, end, steps_between, sleep_each, max_depth=3):
         pos_a, ori_a = start["position"], start["orientation"]
@@ -249,24 +277,32 @@ class UR5Sim():
                 self.record_frame()
                 time.sleep(1 / self.fps)
 
-def demo_simulation():
+def demo_simulation(tool_offset=None):
     """ Demo program showing how to use the sim """
     sim = UR5Sim()
+    if tool_offset is not None:
+        sim.set_tool_offset(tool_offset)
     sim.add_gui_sliders()
     while True:
         x, y, z, Rx, Ry, Rz = sim.read_gui_sliders()
+        ox = pybullet.readUserDebugParameter(sim.sliders[7])
+        oy = pybullet.readUserDebugParameter(sim.sliders[8])
+        oz = pybullet.readUserDebugParameter(sim.sliders[9])
+        sim.set_tool_offset([ox, oy, oz])
         joint_angles = sim.calculate_ik([x, y, z], [Rx, Ry, Rz])
         sim.set_joint_angles(joint_angles)
         sim.check_collisions()
 
 
-def record_demo_simulation(export_path=None):
+def record_demo_simulation(export_path=None, tool_offset=None):
     if export_path is None:
         export_path = os.path.join(os.path.dirname(_PKG_DIR), "..", "data", "poses.json")
     export_path = os.path.abspath(export_path)
     sim = None
     try:
         sim = UR5Sim()
+        if tool_offset is not None:
+            sim.set_tool_offset(tool_offset)
         sim.add_gui_sliders()
         sim.start_recording()
 
@@ -275,6 +311,10 @@ def record_demo_simulation(export_path=None):
             if pybullet.readUserDebugParameter(sim._quit_slider) > 0.5:
                 break
             x, y, z, Rx, Ry, Rz = sim.read_gui_sliders()
+            ox = pybullet.readUserDebugParameter(sim.sliders[6])
+            oy = pybullet.readUserDebugParameter(sim.sliders[7])
+            oz = pybullet.readUserDebugParameter(sim.sliders[8])
+            sim.set_tool_offset([ox, oy, oz])
             joint_angles = sim.calculate_ik([x, y, z], [Rx, Ry, Rz])
             sim.set_joint_angles(joint_angles)
             sim.record_frame()
@@ -289,22 +329,26 @@ def record_demo_simulation(export_path=None):
             print(f"[Done: exported {len(sim.recorded_frames)} frames to {export_path}]", flush=True)
 
 
-def run_path_simulation(waypoints, export_path=None, home_pose=None):
+def run_path_simulation(waypoints, export_path=None, home_pose=None, tool_offset=None):
     if export_path is None:
         export_path = os.path.join(os.path.dirname(_PKG_DIR), "..", "data", "poses.json")
     export_path = os.path.abspath(export_path)
     sim = UR5Sim()
+    if tool_offset is not None:
+        sim.set_tool_offset(tool_offset)
     sim.start_recording()
     sim.follow_path(waypoints, home_pose=home_pose)
     sim.export_json(export_path)
     pybullet.disconnect()
 
 
-def record_workspace(num_positions=300, steps_between=30, export_path=None, fixed_wrist=None):
+def record_workspace(num_positions=300, steps_between=30, export_path=None, fixed_wrist=None, tool_offset=None):
     if export_path is None:
         export_path = os.path.join(os.path.dirname(_PKG_DIR), "..", "data", "workspace.json")
     export_path = os.path.abspath(export_path)
     sim = UR5Sim(gui=False)
+    if tool_offset is not None:
+        sim.set_tool_offset(tool_offset)
 
     joint_ids = [1, 2, 3, 4, 5, 6]
     joint_limits = {}
@@ -362,4 +406,4 @@ def record_workspace(num_positions=300, steps_between=30, export_path=None, fixe
 
 
 if __name__ == "__main__":
-    record_workspace()
+    record_demo_simulation()
