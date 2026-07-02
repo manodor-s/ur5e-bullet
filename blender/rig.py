@@ -30,6 +30,7 @@ SCRIPT_DIR = _script_dir()
 ROOT = os.path.dirname(SCRIPT_DIR)
 POSE_JSON = os.path.join(ROOT, "data", "urdf_data.json")
 OBJ_DIR = os.path.join(ROOT, "data", "meshes")
+S = 10
 
 MESH_ROTATIONS = {
     "base_link": (math.radians(90), 0, 0),
@@ -43,12 +44,12 @@ MESH_ROTATIONS = {
 
 MESH_OFFSETS = {
     "base_link": (0, 0, 0),
-    "shoulder_link": (0, -0.05, 0),
-    "upper_arm_link": (0, -0.05, 0),
-    "forearm_link": (0, -0.05, 0),
-    "wrist_1_link": (0, -0.05, 0),
-    "wrist_2_link": (0, -0.05, 0),
-    "wrist_3_link": (0, -0.05, 0),
+    "shoulder_link": (0, -0.05 * S, 0),
+    "upper_arm_link": (0, -0.05 * S, 0),
+    "forearm_link": (0, -0.05 * S, 0),
+    "wrist_1_link": (0, -0.05 * S, 0),
+    "wrist_2_link": (0, -0.05 * S, 0),
+    "wrist_3_link": (0, -0.05 * S, 0),
 }
 
 JOINT_AXIS_INDEX = {
@@ -91,7 +92,7 @@ def import_meshes(data):
         path = os.path.join(OBJ_DIR, obj_name)
         if not os.path.exists(path):
             print(f"  - {link_name}: Datei fehlt ({path}), erzeuge Platzhalter")
-            bpy.ops.mesh.primitive_uv_sphere_add(radius=0.03, location=(0, 0, 0))
+            bpy.ops.mesh.primitive_uv_sphere_add(radius=0.03 * S, location=(0, 0, 0))
             obj = bpy.context.active_object
             obj.name = link_name
             meshes[link_name] = obj
@@ -110,12 +111,12 @@ def import_meshes(data):
                     break
         if obj:
             obj.name = link_name
+            obj.scale = (S, S, S)
             obj.rotation_euler = MESH_ROTATIONS.get(link_name, (0, 0, 0))
-            if any(v != 0 for v in obj.rotation_euler):
-                bpy.ops.object.select_all(action="DESELECT")
-                obj.select_set(True)
-                bpy.context.view_layer.objects.active = obj
-                bpy.ops.object.transform_apply(rotation=True)
+            bpy.ops.object.select_all(action="DESELECT")
+            obj.select_set(True)
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.object.transform_apply(rotation=True, scale=True)
             meshes[link_name] = obj
             print(f"  + {link_name} -> {obj_name}")
         else:
@@ -140,17 +141,17 @@ def create_armature(data):
         axis = joint["axis"]
 
         eb = ebones.new(name)
-        eb.head = Vector(pos)
+        eb.head = Vector(pos) * S
 
         ax_idx = JOINT_AXIS_INDEX.get(name, 2)
         if name == "wrist_2_joint":
-            eb.tail = Vector(pos) + Vector((0, 0, -0.05))
+            eb.tail = Vector(pos) * S + Vector((0, 0, -0.05 * S))
             eb.roll = 0.0
         elif ax_idx == 2:
-            eb.tail = Vector(pos) + Vector((0, 0, 0.05))
+            eb.tail = Vector(pos) * S + Vector((0, 0, 0.05 * S))
             eb.roll = 0.0
         else:
-            eb.tail = Vector(pos) + Vector((0, 0.05, 0))
+            eb.tail = Vector(pos) * S + Vector((0, 0.05 * S, 0))
             eb.roll = math.pi / 2
 
         if parent_name and parent_name in ebones:
@@ -209,18 +210,19 @@ def add_scanner_and_camera(arm_obj, meshes):
         return
 
     obj.name = "rough_scanner"
+    obj.scale = (S, S, S)
     obj.rotation_euler = (math.radians(90), 0, 0)
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
-    bpy.ops.object.transform_apply(rotation=True)
+    bpy.ops.object.transform_apply(rotation=True, scale=True)
 
     obj.parent = arm_obj
     obj.parent_type = "BONE"
     obj.parent_bone = "wrist_3_joint"
     obj.matrix_parent_inverse = Matrix.Identity(4)
-    obj.location = Vector((0, 0.16, 0))
-    obj.rotation_euler = (0, math.pi, 0)
+    obj.location = Vector((0, 0.16 * S, 0))
+    obj.rotation_euler = (0, math.radians(90), 0)
     meshes["rough_scanner"] = obj
     print("  + rough_scanner -> wrist_3_joint")
 
@@ -229,8 +231,41 @@ def add_scanner_and_camera(arm_obj, meshes):
     cam.name = "ScannerCamera"
     cam.parent = obj
     cam.matrix_parent_inverse = Matrix.Identity(4)
-    cam.location = Vector((0, 0.1, 0))
+    cam.location = Vector((0, 0.1 * S, -0.01*S))
     print("  + ScannerCamera -> rough_scanner (tip)")
+
+    bpy.ops.object.light_add(type="SPOT")
+    light = bpy.context.active_object
+    light.name = "ScannerLight"
+    light.parent = obj
+    light.matrix_parent_inverse = Matrix.Identity(4)
+    light.location = Vector((0, 0.1 * S, -0.01 * S))
+    light.data.energy = 3
+    light.data.spot_size = math.radians(60)
+    print("  + ScannerLight -> rough_scanner (tip)")
+
+
+def add_gebissstand():
+    gebiss_path = os.path.join(OBJ_DIR, "Gebissstand_ohne_scheibe.obj")
+    if not os.path.exists(gebiss_path):
+        print("  - Gebissstand.obj nicht gefunden")
+        return
+
+    bpy.ops.wm.obj_import(filepath=gebiss_path)
+    obj = bpy.context.active_object
+    if not obj or obj.type != "MESH":
+        print("  ! Gebissstand-Import fehlgeschlagen")
+        return
+
+    obj.name = "Gebissstand"
+    obj.scale = (S, S, S)
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.transform_apply(scale=True)
+    obj.location = Vector((0.8 * S, 0, 0.25*S))
+    obj.rotation_euler = (0, 0, -math.radians(90))
+    print(f"  + Gebissstand -> ({obj.location.x:.2f}, {obj.location.y:.2f}, {obj.location.z:.2f})")
 
 
 def main():
@@ -252,6 +287,9 @@ def main():
 
     print("Fuege Scanner und Kamera hinzu...")
     add_scanner_and_camera(arm_obj, meshes)
+
+    print("Fuege Gebissstand hinzu...")
+    add_gebissstand()
 
     bpy.context.scene.frame_set(1)
     print("\nFertig! UR5e riggt.")

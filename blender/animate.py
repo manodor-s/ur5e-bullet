@@ -33,7 +33,7 @@ def add_end_effector_track(data):
         quat = f["end_effector_orientation"]
 
         scene.frame_set(frame)
-        empty.location = Vector(pos)
+        empty.location = Vector(pos) * 10
         empty.rotation_mode = "QUATERNION"
         empty.rotation_quaternion = Quaternion([quat[3], quat[0], quat[1], quat[2]])
 

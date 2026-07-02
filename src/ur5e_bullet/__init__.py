@@ -3,8 +3,7 @@ import math
 import json
 import numpy as np
 import time
-import pybullet 
-import random
+import pybullet
 from datetime import datetime
 import pybullet_data
 from collections import namedtuple
@@ -27,6 +26,8 @@ class UR5Sim():
         pybullet.setRealTimeSimulation(True)
         
         self.end_effector_index = 7
+        self.scanner = None
+        self.scanner_orn = None
         self.ur5 = self.load_robot()
         self.num_joints = pybullet.getNumJoints(self.ur5)
         
@@ -77,6 +78,17 @@ class UR5Sim():
             "end_effector_position": [float(p) for p in pos],
             "end_effector_orientation": [float(q) for q in quat],
         })
+        self._update_scanner()
+
+
+    def _update_scanner(self):
+        if self.scanner is None:
+            return
+        wrist3_pos, wrist3_orn = pybullet.getLinkState(self.ur5, 6)[:2]
+        offset_world = pybullet.rotateVector(wrist3_orn, [0, 0, -0.14])
+        scanner_pos = [wrist3_pos[i] + offset_world[i] for i in range(3)]
+        scanner_orn = pybullet.multiplyTransforms([0,0,0], wrist3_orn, [0,0,0], self.scanner_orn)[1]
+        pybullet.resetBasePositionAndOrientation(self.scanner, scanner_pos, scanner_orn)
 
 
     def export_json(self, path="recorded_poses.json"):
@@ -95,6 +107,61 @@ class UR5Sim():
         flags = pybullet.URDF_USE_SELF_COLLISION
         table = pybullet.loadURDF(TABLE_URDF_PATH, [0.5, 0, -0.6300], [0, 0, 0, 1])
         robot = pybullet.loadURDF(ROBOT_URDF_PATH, [0, 0, 0], [0, 0, 0, 1], flags=flags)
+        self.ur5 = robot
+
+        gebiss_path = os.path.join(_PKG_DIR, "..", "..", "data", "meshes", "Gebissstand_ohne_scheibe.obj")
+        if os.path.exists(gebiss_path):
+            vis = pybullet.createVisualShape(
+                shapeType=pybullet.GEOM_MESH,
+                fileName=gebiss_path,
+                rgbaColor=[1, 1, 1, 1],
+                meshScale=[1, 1, 1],
+            )
+            gebiss_rot = pybullet.getQuaternionFromEuler([math.radians(90), 0, -math.radians(90)])  # [Rx, Ry, Rz] in rad
+            pybullet.createMultiBody(
+                baseMass=0, baseVisualShapeIndex=vis,
+                basePosition=[0.8, 0, 0.25],
+                baseOrientation=gebiss_rot,
+            )
+            print("[Gebissstand geladen]")
+        else:
+            print(f"[Gebissstand.obj nicht gefunden: {gebiss_path}]")
+
+        scanner_path = os.path.join(_PKG_DIR, "..", "..", "data", "meshes", "rough_scanner.obj")
+        if os.path.exists(scanner_path):
+            vis = pybullet.createVisualShape(
+                shapeType=pybullet.GEOM_MESH,
+                fileName=scanner_path,
+                rgbaColor=[1, 1, 1, 1],
+                meshScale=[1, 1, 1],
+            )
+            col = pybullet.createCollisionShape(
+                shapeType=pybullet.GEOM_MESH,
+                fileName=scanner_path,
+                meshScale=[1, 1, 1],
+            )
+            scanner = pybullet.createMultiBody(
+                baseMass=0,
+                baseVisualShapeIndex=vis,
+                baseCollisionShapeIndex=col,
+            )
+            q_x90 = pybullet.getQuaternionFromEuler([math.pi / 2, 0, 0])
+            q_y180 = pybullet.getQuaternionFromEuler([0, math.pi, 0])
+            q_rx_neg90 = pybullet.getQuaternionFromEuler([-math.pi / 2, 0, 0])
+            q_z90 = pybullet.getQuaternionFromEuler([0, 0, math.pi])
+            self.scanner_orn = pybullet.multiplyTransforms(
+                [0,0,0], q_z90,
+                [0,0,0], pybullet.multiplyTransforms(
+                    [0,0,0], q_rx_neg90,
+                    [0,0,0], pybullet.multiplyTransforms([0,0,0], q_y180, [0,0,0], q_x90)[1]
+                )[1]
+            )[1]
+            self.scanner = scanner
+            self._update_scanner()
+            print("[Scanner an wrist_3_link befestigt]")
+        else:
+            print(f"[rough_scanner.obj nicht gefunden: {scanner_path}]")
+
         return robot
     
 
@@ -116,6 +183,7 @@ class UR5Sim():
             targetVelocities=[0]*len(poses),
             positionGains=[0.04]*len(poses), forces=forces
         )
+        self._update_scanner()
 
 
     def get_joint_angles(self):
@@ -341,69 +409,6 @@ def run_path_simulation(waypoints, export_path=None, home_pose=None, tool_offset
     sim.start_recording()
     sim.follow_path(waypoints, home_pose=home_pose)
     sim.export_json(export_path)
-    pybullet.disconnect()
-
-
-def record_workspace(num_positions=300, steps_between=30, export_path=None, fixed_wrist=None, tool_offset=None):
-    if export_path is None:
-        export_path = os.path.join(os.path.dirname(_PKG_DIR), "..", "data", "workspace.json")
-    export_path = os.path.abspath(export_path)
-    sim = UR5Sim(gui=False)
-    if tool_offset is not None:
-        sim.set_tool_offset(tool_offset)
-
-    joint_ids = [1, 2, 3, 4, 5, 6]
-    joint_limits = {}
-    for joint in sim.joints.values():
-        if joint.controllable:
-            joint_limits[joint.name] = (joint.lowerLimit, joint.upperLimit)
-
-    sim.start_recording()
-    cur_angles = sim.get_joint_angles()
-    target_positions = []
-    expected_frames = num_positions * steps_between
-    print(f"[Start: {num_positions} Positionen x {steps_between} Schritte = {expected_frames} Frames]", flush=True)
-
-    for i in range(num_positions):
-        target = []
-        for jname in sim.control_joints:
-            if fixed_wrist and "wrist" in jname:
-                target.append(fixed_wrist.get(jname, 0.0))
-            else:
-                lo, hi = joint_limits[jname]
-                target.append(random.uniform(float(lo), float(hi)))
-
-        for t in range(1, steps_between + 1):
-            frac = t / steps_between
-            interp = [a + frac * (b - a) for a, b in zip(cur_angles, target)]
-            for idx, angle in zip(joint_ids, interp):
-                pybullet.resetJointState(sim.ur5, idx, angle)
-            sim.record_frame()
-
-        for idx, angle in zip(joint_ids, target):
-            pybullet.resetJointState(sim.ur5, idx, angle)
-        pos, _ = sim.get_current_pose()
-        target_positions.append([float(pos[0]), float(pos[1]), float(pos[2])])
-
-        if (i + 1) % 50 == 0:
-            print(f"  {i + 1}/{num_positions}", flush=True)
-
-        cur_angles = target
-
-    sim.fps = 60
-    print(f"[Frames aufgezeichnet: {len(sim.recorded_frames)}]", flush=True)
-    print(f"[Exportiere nach {export_path}]", flush=True)
-    data = {
-        "fps": sim.fps,
-        "num_frames": len(sim.recorded_frames),
-        "control_joints": sim.control_joints,
-        "frames": sim.recorded_frames,
-        "samples": target_positions,
-        "fixed_wrist": fixed_wrist,
-    }
-    with open(export_path, "w") as f:
-        json.dump(data, f, indent=2)
-    print(f"[Done: {len(sim.recorded_frames)} Frames, {len(target_positions)} Samples]", flush=True)
     pybullet.disconnect()
 
 
