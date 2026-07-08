@@ -194,12 +194,10 @@ class UR5Sim():
             if speed > 0:
                 time.sleep(0.01 / speed)
 
-    def _linear_segment(self, ee_start, ee_end, seed=None):
-        if seed is None:
-            seed = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
+    def _linear_segment(self, ee_start, ee_end):
         steps = 100
         path = []
-        cur = seed
+        initial_state = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
         for i in range(1, steps + 1):
             t = i / steps
             pos = [
@@ -207,11 +205,16 @@ class UR5Sim():
                 for j in range(3)
             ]
             quat = pybullet.getQuaternionSlerp(ee_start[1], ee_end[1], t)
-            conf = self._ik((pos, quat), seed=cur)
+            for j, v in zip(self._joint_ids, path[-1] if path else initial_state):
+                pybullet.resetJointState(self.ur5, j, v)
+            conf = self._ik((pos, quat))
             if conf is None or not self._collision_free(conf):
+                for j, v in zip(self._joint_ids, initial_state):
+                    pybullet.resetJointState(self.ur5, j, v)
                 return None
             path.append(conf)
-            cur = conf
+        for j, v in zip(self._joint_ids, initial_state):
+            pybullet.resetJointState(self.ur5, j, v)
         return path
 
     def _probe_rrt(self, target_pos, target_ori):
@@ -378,13 +381,18 @@ class UR5Sim():
         """Direct linear path (2 seed variants) → None."""
         render_flag = pybullet.COV_ENABLE_RENDERING
         pybullet.configureDebugVisualizer(render_flag, 0)
-        for seed in [None, list(self._null_space[3])]:
-            path = self._linear_segment(ee_start, ee_target, seed=seed)
-            if path is not None:
-                pybullet.configureDebugVisualizer(render_flag, 1)
-                return path
+        path = self._linear_segment(ee_start, ee_target)
+        if path is not None:
+            pybullet.configureDebugVisualizer(render_flag, 1)
+            return path
+        saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
+        for j, v in zip(self._joint_ids, self._null_space[3]):
+            pybullet.resetJointState(self.ur5, j, v)
+        path = self._linear_segment(ee_start, ee_target)
+        for j, v in zip(self._joint_ids, saved):
+            pybullet.resetJointState(self.ur5, j, v)
         pybullet.configureDebugVisualizer(render_flag, 1)
-        return None
+        return path
 
     def move_to(self, tcp_pos, tcp_ori, linear=True, obstacles=[], tol=0.08, speed=1.0):
         ee_target = self._tcp_to_ee(tcp_pos, tcp_ori)
