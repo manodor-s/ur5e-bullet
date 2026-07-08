@@ -193,13 +193,18 @@ class UR5Sim():
         return None
 
     def _execute(self, path, speed=1.0):
-        for conf in path:
-            for i, val in zip(self._joint_ids, conf):
-                pybullet.resetJointState(self.ur5, i, val)
-            pybullet.stepSimulation()
-            print(f"\r{_joint_deviation_line(self)}", end="", flush=True)
-            if speed > 0:
-                time.sleep(0.01 / speed)
+        steps = 50 if len(path) < 20 else 1
+        total = (len(path) - 1) * steps or 1
+        for i in range(len(path) - 1):
+            for s in range(1, steps + 1):
+                t = s / steps
+                conf = [path[i][j] + t * (path[i+1][j] - path[i][j]) for j in range(6)]
+                for j, v in zip(self._joint_ids, conf):
+                    pybullet.resetJointState(self.ur5, j, v)
+                pybullet.stepSimulation()
+                print(f"\r{_joint_deviation_line(self)}", end="", flush=True)
+                if speed > 0:
+                    time.sleep(0.01 / speed * 100 / total)
         print()
 
     def _linear_segment(self, ee_start, ee_end):
@@ -214,9 +219,10 @@ class UR5Sim():
                 for j in range(3)
             ]
             quat = pybullet.getQuaternionSlerp(ee_start[1], ee_end[1], t)
-            for j, v in zip(self._joint_ids, path[-1] if path else initial_state):
+            prev = path[-1] if path else initial_state
+            for j, v in zip(self._joint_ids, prev):
                 pybullet.resetJointState(self.ur5, j, v)
-            conf = self._ik((pos, quat))
+            conf = self._ik((pos, quat), seed=prev)
             if conf is None:
                 self._last_linear_error = ("ik", i)
                 for j, v in zip(self._joint_ids, initial_state):
@@ -247,7 +253,7 @@ class UR5Sim():
         render_flag = pybullet.COV_ENABLE_RENDERING
         pybullet.configureDebugVisualizer(render_flag, 0)
 
-        target_configuration = self._conf_for(ee_target)
+        target_configuration = self._conf_for(ee_target, seed=original_joint_positions)
         if target_configuration is None or not self._collision_free(target_configuration):
             target_configuration = self._find_collision_free_conf(ee_target)
         if target_configuration is None:
@@ -436,19 +442,24 @@ class UR5Sim():
 
     def move_to(self, tcp_pos, tcp_ori, linear=True, obstacles=[], tol=0.08, speed=1.0):
         ee_target = self._tcp_to_ee(tcp_pos, tcp_ori)
-        target_configuration = self._conf_for(ee_target)
+        render_flag = pybullet.COV_ENABLE_RENDERING
+        pybullet.configureDebugVisualizer(render_flag, 0)
+        current_joints = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
+        target_configuration = self._conf_for(ee_target, seed=current_joints)
         if target_configuration is None:
+            pybullet.configureDebugVisualizer(render_flag, 1)
             print(f"[nein] Ziel {tcp_pos} nicht erreichbar")
             return False
 
         def run(path, label=""):
+            pybullet.configureDebugVisualizer(render_flag, 1)
             self._execute(path, speed)
             actual_tcp, _ = self.get_tcp_pose()
             error_mm = math.sqrt(sum((actual_tcp[i]-tcp_pos[i])**2 for i in range(3)))
             if error_mm > 0.005:
                 print(f"[!] {tcp_pos} → {error_mm*1000:.0f} mm daneben")
             else:
-                print(f"[ok] {tcp_pos}{label}")
+                print(f"[ok] {tcp_pos}  ({error_mm*1000:.0f} mm){label}")
             self._save_last(tcp_pos, tcp_ori)
             return True
 
@@ -468,6 +479,7 @@ class UR5Sim():
                 print(f"[nein] {names[err[2]]} am Limit – kein Pfad zu {tcp_pos}")
             else:
                 print(f"[nein] Kein Pfad zu {tcp_pos}")
+            pybullet.configureDebugVisualizer(render_flag, 1)
             return False
 
         if not self._collision_free(target_configuration):
@@ -490,6 +502,7 @@ class UR5Sim():
                     if path is not None:
                         target_configuration = path[-1]
             if target_configuration is None:
+                pybullet.configureDebugVisualizer(render_flag, 1)
                 print(f"[nein] Ziel {tcp_pos} kollidiert")
                 return False
         path = plan_joint_motion(
@@ -498,6 +511,7 @@ class UR5Sim():
             restarts=10, smooth=30,
         )
         if path is None:
+            pybullet.configureDebugVisualizer(render_flag, 1)
             print(f"[nein] Kein Pfad zu {tcp_pos}")
             return False
         return run(path)
