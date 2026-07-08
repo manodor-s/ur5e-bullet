@@ -1,4 +1,5 @@
 import os
+import sys
 import math
 import random
 import time
@@ -62,6 +63,7 @@ class UR5Sim():
         self.tool_offset_orn = None
         self._last_conf = None
         self._last_target = None
+        self._last_linear_error = None
 
     def load_robot(self):
         self._table = pybullet.loadURDF(
@@ -196,8 +198,12 @@ class UR5Sim():
             pybullet.stepSimulation()
             if speed > 0:
                 time.sleep(0.01 / speed)
+            _draw_joint_status(self, live=len(path) > 1)
+        if len(path) > 1:
+            self._live_table_done = True
 
     def _linear_segment(self, ee_start, ee_end):
+        self._last_linear_error = None
         steps = 100
         path = []
         initial_state = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
@@ -211,7 +217,21 @@ class UR5Sim():
             for j, v in zip(self._joint_ids, path[-1] if path else initial_state):
                 pybullet.resetJointState(self.ur5, j, v)
             conf = self._ik((pos, quat))
-            if conf is None or not self._collision_free(conf):
+            if conf is None:
+                self._last_linear_error = ("ik", i)
+                for j, v in zip(self._joint_ids, initial_state):
+                    pybullet.resetJointState(self.ur5, j, v)
+                return None
+            if not self._joint_limits_ok(conf):
+                for idx, v in enumerate(conf):
+                    if not (self._null_space[0][idx] <= v <= self._null_space[1][idx]):
+                        self._last_linear_error = ("limit", i, idx)
+                        break
+                for j, v in zip(self._joint_ids, initial_state):
+                    pybullet.resetJointState(self.ur5, j, v)
+                return None
+            if not self._collision_free(conf):
+                self._last_linear_error = ("collision", i)
                 for j, v in zip(self._joint_ids, initial_state):
                     pybullet.resetJointState(self.ur5, j, v)
                 return None
@@ -357,6 +377,7 @@ class UR5Sim():
         return result
 
     def _probe_path(self, target_pos, target_ori, rrt=False):
+        self._last_linear_error = None
         if rrt:
             return self._probe_rrt(target_pos, target_ori)
         return self._probe_linear(target_pos, target_ori)
@@ -400,6 +421,7 @@ class UR5Sim():
         if path is not None:
             pybullet.configureDebugVisualizer(render_flag, 1)
             return path
+        err1 = self._last_linear_error
         saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
         for j, v in zip(self._joint_ids, self._null_space[3]):
             pybullet.resetJointState(self.ur5, j, v)
@@ -407,6 +429,9 @@ class UR5Sim():
         for j, v in zip(self._joint_ids, saved):
             pybullet.resetJointState(self.ur5, j, v)
         pybullet.configureDebugVisualizer(render_flag, 1)
+        if path is None and err1 and err1[0] == "limit":
+            matches = [e for e in [err1, self._last_linear_error] if e[0] == "limit"]
+            self._last_linear_error = matches[0] if matches else err1
         return path
 
     def move_to(self, tcp_pos, tcp_ori, linear=True, obstacles=[], tol=0.08, speed=1.0):
@@ -415,6 +440,14 @@ class UR5Sim():
         if target_configuration is None:
             print(f"[nein] Ziel {tcp_pos} nicht erreichbar")
             return False
+
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        saved_stderr_fd = os.dup(2)
+        os.dup2(devnull_fd, 2)
+
+        def restore_stderr():
+            os.dup2(saved_stderr_fd, 2)
+            os.close(devnull_fd)
 
         def run(path, label=""):
             self._execute(path, speed)
@@ -427,49 +460,58 @@ class UR5Sim():
             self._save_last(tcp_pos, tcp_ori)
             return True
 
-        if linear:
-            ee_start = pybullet.getLinkState(
-                self.ur5, self.end_effector_index,
-                computeForwardKinematics=True,
-            )[:2]
-            path = self._find_path(ee_start, ee_target)
-            if path is not None:
-                return run(path)
-
-            print(f"[nein] Kein Pfad zu {tcp_pos}")
-            return False
-
-        if not self._collision_free(target_configuration):
-            target_configuration = self._find_collision_free_conf(ee_target)
-            if target_configuration is None:
+        try:
+            if linear:
                 ee_start = pybullet.getLinkState(
                     self.ur5, self.end_effector_index,
                     computeForwardKinematics=True,
                 )[:2]
-                path = self._linear_segment(ee_start, ee_target)
+                path = self._find_path(ee_start, ee_target)
                 if path is not None:
-                    target_configuration = path[-1]
+                    return run(path)
+
+                err = self._last_linear_error
+                if err and err[0] == "limit":
+                    names = ["shoulder_pan", "shoulder_lift", "elbow",
+                             "wrist_1", "wrist_2", "wrist_3"]
+                    print(f"[nein] {names[err[2]]} am Limit – kein Pfad zu {tcp_pos}")
                 else:
-                    saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-                    for j, v in zip(self._joint_ids, self._null_space[3]):
-                        pybullet.resetJointState(self.ur5, j, v)
+                    print(f"[nein] Kein Pfad zu {tcp_pos}")
+                return False
+
+            if not self._collision_free(target_configuration):
+                target_configuration = self._find_collision_free_conf(ee_target)
+                if target_configuration is None:
+                    ee_start = pybullet.getLinkState(
+                        self.ur5, self.end_effector_index,
+                        computeForwardKinematics=True,
+                    )[:2]
                     path = self._linear_segment(ee_start, ee_target)
-                    for j, v in zip(self._joint_ids, saved):
-                        pybullet.resetJointState(self.ur5, j, v)
                     if path is not None:
                         target_configuration = path[-1]
-            if target_configuration is None:
-                print(f"[nein] Ziel {tcp_pos} kollidiert")
+                    else:
+                        saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
+                        for j, v in zip(self._joint_ids, self._null_space[3]):
+                            pybullet.resetJointState(self.ur5, j, v)
+                        path = self._linear_segment(ee_start, ee_target)
+                        for j, v in zip(self._joint_ids, saved):
+                            pybullet.resetJointState(self.ur5, j, v)
+                        if path is not None:
+                            target_configuration = path[-1]
+                if target_configuration is None:
+                    print(f"[nein] Ziel {tcp_pos} kollidiert")
+                    return False
+            path = plan_joint_motion(
+                self.ur5, self._joint_ids, target_configuration,
+                obstacles=obstacles, self_collisions=True,
+                restarts=10, smooth=30,
+            )
+            if path is None:
+                print(f"[nein] Kein Pfad zu {tcp_pos}")
                 return False
-        path = plan_joint_motion(
-            self.ur5, self._joint_ids, target_configuration,
-            obstacles=obstacles, self_collisions=True,
-            restarts=10, smooth=30,
-        )
-        if path is None:
-            print(f"[nein] Kein Pfad zu {tcp_pos}")
-            return False
-        return run(path)
+            return run(path)
+        finally:
+            restore_stderr()
 
     def _save_last(self, tcp_pos, tcp_ori):
         self._last_conf = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
@@ -498,6 +540,32 @@ class UR5Sim():
                 [0, 0, 0], quat, self.tool_offset_pos, self.tool_offset_orn
             )[1]
         return pos, quat
+
+
+def _draw_joint_status(sim, highlight=None, live=False):
+    names = ["shoulder_pan", "shoulder_lift", "elbow",
+             "wrist_1", "wrist_2", "wrist_3"]
+    lines = ["── Gelenke ──────────────────────────────────"]
+    for i, jid in enumerate(sim._joint_ids):
+        angle = pybullet.getJointState(sim.ur5, jid)[0]
+        deg = math.degrees(angle)
+        low = math.degrees(sim._null_space[0][i])
+        high = math.degrees(sim._null_space[1][i])
+        mid = (low + high) / 2
+        abw = deg - mid
+        bar = "=" * max(1, int(abs(abw) / 5))
+        side = ">" if abw > 0 else "<"
+        marker = " ⚠" if highlight is not None and i == highlight else ""
+        lines.append(f"  {names[i]:14s} {deg:6.0f}°  [{low:5.0f},{high:5.0f}]  {bar}{side} ({abw:+.0f}){marker}")
+    w = max(len(l) for l in lines)
+    padded = "\r\n".join(l.ljust(w) for l in lines)
+    if live:
+        sys.stdout.write(f"{padded}\n")
+        sim._live_table_phase = 1
+        sys.stdout.flush()
+    else:
+        sim._live_table_phase = 0
+        print(padded)
 
 
 def _draw_crosshair(pos, color, items, label=None):
@@ -619,7 +687,12 @@ def demo_simulation():
         if not linear:
             print(f"  ⛔ Kein RRT-Pfad zu ({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f})")
         else:
-            print(f"  ⛔ Kollision bei ({collision_position[0]:.3f}, {collision_position[1]:.3f}, {collision_position[2]:.3f})")
+            err = sim._last_linear_error
+            if err and err[0] == "limit":
+                names = ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3"]
+                print(f"  ⛔ {names[err[2]]} am Limit")
+            else:
+                print(f"  ⛔ Kollision bei ({collision_position[0]:.3f}, {collision_position[1]:.3f}, {collision_position[2]:.3f})")
         return target_position, target_orientation
 
     print("── UR5e Demo ──────────────────────────────")
@@ -632,6 +705,7 @@ def demo_simulation():
     items = []
     current_speed = 0.5
     tcp_items = draw_tcp()
+    _draw_joint_status(sim)
 
     while True:
         try:
@@ -656,6 +730,7 @@ def demo_simulation():
             tcp_items = []
             sim._execute([sim._last_conf])
             tcp_items = draw_tcp()
+            _draw_joint_status(sim)
             continue
         if cmd.action == "speed":
             current_speed = cmd.params["speed"]
@@ -663,6 +738,8 @@ def demo_simulation():
             pybullet.removeAllUserDebugItems()
             items.clear()
             tcp_items = []
+            tcp_items = draw_tcp()
+            _draw_joint_status(sim)
             continue
 
         pybullet.removeAllUserDebugItems()
@@ -697,17 +774,29 @@ def demo_simulation():
             linear,
         )
 
-        try:
-            confirm = input("  Ausführen? [Y/n] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            break
-        if confirm in ("", "y", "yes"):
-            ok = sim.move_to(target_pos, target_ori, linear=linear, speed=current_speed)
+        if collision_position is not None:
+            ok = False
+        else:
+            try:
+                confirm = input("  Ausführen? [Y/n] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                break
+            ok = False
+            if confirm in ("", "y", "yes"):
+                sim._live_table_done = False
+                ok = sim.move_to(target_pos, target_ori, linear=linear, speed=current_speed)
             if not ok:
                 _draw_crosshair(target_position, [1, 0, 0], items,
                                 f"({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f}) FEHLER")
 
         tcp_items = draw_tcp()
+        live_done = getattr(sim, "_live_table_done", False)
+        sim._live_table_done = False
+        if not live_done:
+            highlight = None
+            if not ok and sim._last_linear_error and sim._last_linear_error[0] == "limit":
+                highlight = sim._last_linear_error[2]
+            _draw_joint_status(sim, highlight)
 
 
 if __name__ == "__main__":
