@@ -52,8 +52,8 @@ class UR5Sim():
 
         self._joint_ids = [self.joints[n].id for n in self.control_joints]
         self._null_space = (
-            [-math.pi, -math.pi, 0, -math.pi, -math.pi, -math.pi],
-            [math.pi, math.pi, math.pi, math.pi, math.pi, math.pi],
+            [-math.pi, -math.pi, 0, 0, -math.pi, -math.pi],
+            [math.pi, math.pi, math.pi, 2*math.pi, math.pi, math.pi],
             [2*math.pi]*6,
             [0, -math.pi/2, math.pi/2, -math.pi/2, -math.pi/2, 0],
         )
@@ -65,6 +65,7 @@ class UR5Sim():
         self._last_conf = None
         self._last_target = None
         self._last_linear_error = None
+        _color_links(self)
 
     def load_robot(self):
         self._table = pybullet.loadURDF(
@@ -193,19 +194,15 @@ class UR5Sim():
         return None
 
     def _execute(self, path, speed=1.0):
-        steps = 50 if len(path) < 20 else 1
-        total = (len(path) - 1) * steps or 1
-        for i in range(len(path) - 1):
-            for s in range(1, steps + 1):
-                t = s / steps
-                conf = [path[i][j] + t * (path[i+1][j] - path[i][j]) for j in range(6)]
-                for j, v in zip(self._joint_ids, conf):
-                    pybullet.resetJointState(self.ur5, j, v)
-                pybullet.stepSimulation()
-                print(f"\r{_joint_deviation_line(self)}", end="", flush=True)
-                if speed > 0:
-                    time.sleep(0.01 / speed * 100 / total)
+        for conf in path:
+            for j, v in zip(self._joint_ids, conf):
+                pybullet.resetJointState(self.ur5, j, v)
+            pybullet.stepSimulation()
+            print(f"\r{_joint_deviation_line(self)}", end="", flush=True)
+            if speed > 0:
+                time.sleep(0.01 / speed)
         print()
+        _color_links(self)
 
     def _linear_segment(self, ee_start, ee_end):
         self._last_linear_error = None
@@ -609,6 +606,18 @@ def _parse_command(tokens):
     })
 
 
+def _color_links(sim):
+    for i, jid in enumerate(sim._joint_ids):
+        angle = pybullet.getJointState(sim.ur5, jid)[0]
+        low = sim._null_space[0][i]
+        high = sim._null_space[1][i]
+        mid = (low + high) / 2
+        max_dev = (high - low) / 2
+        ratio = abs(angle - mid) / max_dev if max_dev else 0
+        ratio = min(1.0, ratio)
+        pybullet.changeVisualShape(sim.ur5, jid, rgbaColor=[ratio, 1 - ratio, 0, 1])
+
+
 def _joint_deviation_line(sim):
     names = ["pan", "lift", "elbow", "w1", "w2", "w3"]
     parts = []
@@ -623,7 +632,7 @@ def _joint_deviation_line(sim):
         ratio = abs(deviation) / max_dev if max_dev else 0
         r = min(255, int(ratio * 255))
         g = min(255, int((1 - ratio) * 255))
-        parts.append(f"\033[38;2;{r};{g};0m{names[i]}{deviation:+6.0f}°\033[0m")
+        parts.append(f"\033[38;2;{r};{g};0m{names[i]}{deg:+6.0f}°\033[0m")
     return "Gelenke: " + " ".join(parts)
 
 
