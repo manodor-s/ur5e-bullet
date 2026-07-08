@@ -195,8 +195,10 @@ class UR5Sim():
             for i, val in zip(self._joint_ids, conf):
                 pybullet.resetJointState(self.ur5, i, val)
             pybullet.stepSimulation()
+            print(f"\r{_joint_deviation_line(self)}", end="", flush=True)
             if speed > 0:
                 time.sleep(0.01 / speed)
+        print()
 
     def _linear_segment(self, ee_start, ee_end):
         self._last_linear_error = None
@@ -591,6 +593,24 @@ def _parse_command(tokens):
     })
 
 
+def _joint_deviation_line(sim):
+    names = ["pan", "lift", "elbow", "w1", "w2", "w3"]
+    parts = []
+    for i, jid in enumerate(sim._joint_ids):
+        angle = pybullet.getJointState(sim.ur5, jid)[0]
+        deg = math.degrees(angle)
+        low = math.degrees(sim._null_space[0][i])
+        high = math.degrees(sim._null_space[1][i])
+        mid = (low + high) / 2
+        deviation = deg - mid
+        max_dev = (high - low) / 2
+        ratio = abs(deviation) / max_dev if max_dev else 0
+        r = min(255, int(ratio * 255))
+        g = min(255, int((1 - ratio) * 255))
+        parts.append(f"\033[38;2;{r};{g};0m{names[i]}{deviation:+6.0f}°\033[0m")
+    return "Gelenke: " + " ".join(parts)
+
+
 def demo_simulation():
     sim = UR5Sim()
 
@@ -745,6 +765,7 @@ def demo_simulation():
                                 f"({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f}) FEHLER")
 
         tcp_items = draw_tcp()
+
 
 
 if __name__ == "__main__":
