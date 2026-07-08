@@ -8,6 +8,8 @@ import pybullet_data
 from collections import namedtuple
 
 from pybullet_planning import plan_joint_motion
+from pybullet_planning.interfaces.robots.link import get_self_link_pairs
+from pybullet_planning.interfaces.robots.joint import get_movable_joints
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 ROBOT_URDF_PATH = os.path.join(_PKG_DIR, "ur_e_description", "urdf", "ur5e.urdf")
@@ -54,6 +56,7 @@ class UR5Sim():
             [0, -math.pi/2, -math.pi/2, -math.pi/2, -math.pi/2, 0],
         )
         self._ik_lambda = 0.05
+        self._collision_link_pairs = get_self_link_pairs(self.ur5, get_movable_joints(self.ur5))
 
         self.tool_offset_pos = None
         self.tool_offset_orn = None
@@ -228,6 +231,23 @@ class UR5Sim():
         if target_configuration is None or not self._collision_free(target_configuration):
             target_configuration = self._find_collision_free_conf(ee_target)
         if target_configuration is None:
+            ee_start = pybullet.getLinkState(
+                self.ur5, self.end_effector_index,
+                computeForwardKinematics=True,
+            )[:2]
+            path = self._linear_segment(ee_start, ee_target)
+            if path is not None:
+                target_configuration = path[-1]
+            else:
+                saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
+                for j, v in zip(self._joint_ids, self._null_space[3]):
+                    pybullet.resetJointState(self.ur5, j, v)
+                path = self._linear_segment(ee_start, ee_target)
+                for j, v in zip(self._joint_ids, saved):
+                    pybullet.resetJointState(self.ur5, j, v)
+                if path is not None:
+                    target_configuration = path[-1]
+        if target_configuration is None:
             pybullet.configureDebugVisualizer(render_flag, 1)
             for j, v in zip(self._joint_ids, original_joint_positions):
                 pybullet.resetJointState(self.ur5, j, v)
@@ -341,36 +361,31 @@ class UR5Sim():
             return self._probe_rrt(target_pos, target_ori)
         return self._probe_linear(target_pos, target_ori)
 
+    def _joint_limits_ok(self, configuration):
+        for idx, v in enumerate(configuration):
+            if not (self._null_space[0][idx] <= v <= self._null_space[1][idx]):
+                return False
+        return True
+
     def _collision_free(self, configuration):
-        original_joint_positions = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
+        if not self._joint_limits_ok(configuration):
+            return False
+        original = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
         for i, v in zip(self._joint_ids, configuration):
             pybullet.resetJointState(self.ur5, i, v)
-        collision_free = True
-        for i in range(-1, self.num_joints):
-            for j in range(i+1, self.num_joints):
-                if abs(i - j) <= 1:
-                    continue
-                contacts = pybullet.getClosestPoints(
-                    self.ur5, self.ur5, 0.0,
-                    linkIndexA=i, linkIndexB=j,
-                )
-                if contacts:
-                    collision_free = False
-                    break
-            if not collision_free:
+        cf = True
+        for i, j in self._collision_link_pairs:
+            if pybullet.getClosestPoints(self.ur5, self.ur5, 0.0, linkIndexA=i, linkIndexB=j):
+                cf = False
                 break
-        if collision_free and hasattr(self, '_table'):
-            for i in range(-1, self.num_joints):
-                contacts = pybullet.getClosestPoints(
-                    self.ur5, self._table, 0.0,
-                    linkIndexA=i,
-                )
-                if contacts:
-                    collision_free = False
-                    break
-        for i, v in zip(self._joint_ids, original_joint_positions):
+        if cf and hasattr(self, '_table'):
+            cf = not any(
+                pybullet.getClosestPoints(self.ur5, self._table, 0.0, linkIndexA=i)
+                for i in range(-1, self.num_joints)
+            )
+        for i, v in zip(self._joint_ids, original):
             pybullet.resetJointState(self.ur5, i, v)
-        return collision_free
+        return cf
 
     def _via_point(self, start_pos, target_pos, lift=0.1):
         z = max(start_pos[2], target_pos[2]) + lift
@@ -426,6 +441,23 @@ class UR5Sim():
 
         if not self._collision_free(target_configuration):
             target_configuration = self._find_collision_free_conf(ee_target)
+            if target_configuration is None:
+                ee_start = pybullet.getLinkState(
+                    self.ur5, self.end_effector_index,
+                    computeForwardKinematics=True,
+                )[:2]
+                path = self._linear_segment(ee_start, ee_target)
+                if path is not None:
+                    target_configuration = path[-1]
+                else:
+                    saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
+                    for j, v in zip(self._joint_ids, self._null_space[3]):
+                        pybullet.resetJointState(self.ur5, j, v)
+                    path = self._linear_segment(ee_start, ee_target)
+                    for j, v in zip(self._joint_ids, saved):
+                        pybullet.resetJointState(self.ur5, j, v)
+                    if path is not None:
+                        target_configuration = path[-1]
             if target_configuration is None:
                 print(f"[nein] Ziel {tcp_pos} kollidiert")
                 return False
