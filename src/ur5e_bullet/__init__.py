@@ -186,32 +186,55 @@ class UR5Sim():
             cur = conf
         return path
 
-    def _probe_path(self, tcp_pos, tcp_ori):
+    def _probe_path(self, target_pos, target_ori):
         """Prüft den direkten linearen Pfad.
         Rückgabe: (last_good, fail_pos, dev_mm, actual_end)
-          last_good:   letzte gültige Position auf dem Pfad
+          last_good:   letzte gültige Position auf dem Pfad (TCP)
           fail_pos:    Position an der es scheitert (None = OK)
           dev_mm:      Abweichung am Ziel in mm (0 = perfekt)
           actual_end:  tatsächlich erreichter TCP (bei dev>0)
         """
-        ee_target = self._tcp_to_ee(tcp_pos, tcp_ori)
+        ee_target = self._tcp_to_ee(target_pos, target_ori)
         ee_start = pybullet.getLinkState(
             self.ur5, self.end_effector_index,
             computeForwardKinematics=True,
         )[:2]
+        start_tcp, _ = self.get_tcp_pose()
         path = self._linear_segment(ee_start, ee_target)
         if path is not None:
-            conf = path[-1]
+            steps = len(path)
             saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-            for i, v in zip(self._joint_ids, conf):
-                pybullet.resetJointState(self.ur5, i, v)
-            actual, _ = self.get_tcp_pose()
-            dev = math.sqrt(sum((actual[i]-tcp_pos[i])**2 for i in range(3))) * 1000
-            for i, v in zip(self._joint_ids, saved):
-                pybullet.resetJointState(self.ur5, i, v)
-            if dev > 5:
-                return actual, None, dev, actual
-            return tcp_pos, None, 0.0, actual
+            last_good_t = 0.0
+            for i, conf in enumerate(path):
+                t = (i + 1) / steps
+                tcp_target = [
+                    start_tcp[j] + t * (target_pos[j] - start_tcp[j])
+                    for j in range(3)
+                ]
+                for j, v in zip(self._joint_ids, conf):
+                    pybullet.resetJointState(self.ur5, j, v)
+                actual, _ = self.get_tcp_pose()
+                dev = math.sqrt(sum((actual[j]-tcp_target[j])**2 for j in range(3))) * 1000
+                if dev <= 5:
+                    last_good_t = t
+                else:
+                    break
+            # letztes gutes Ziel auf der Geraden
+            last_good_pos = [
+                start_tcp[j] + last_good_t * (target_pos[j] - start_tcp[j])
+                for j in range(3)
+            ]
+            # Abweichung am Pfadende
+            conf = path[-1]
+            for j, v in zip(self._joint_ids, conf):
+                pybullet.resetJointState(self.ur5, j, v)
+            actual_end, _ = self.get_tcp_pose()
+            end_dev = math.sqrt(sum((actual_end[j]-target_pos[j])**2 for j in range(3))) * 1000
+            for j, v in zip(self._joint_ids, saved):
+                pybullet.resetJointState(self.ur5, j, v)
+            if last_good_t >= 1.0 and end_dev <= 5:
+                return target_pos, None, 0.0, actual_end
+            return last_good_pos, None, end_dev, actual_end
         steps = 100
         cur = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
         last = ee_start[0]
@@ -495,15 +518,24 @@ def demo_simulation():
             items.append(pybullet.addUserDebugLine(
                 tcp_pos, pos, [0, 1, 0], 2,
             ))
+            target_pos = pos
+            target_ori = ori
         elif fail is None and dev > 0:
             items.append(pybullet.addUserDebugLine(
-                tcp_pos, actual_end, [0, 1, 0], 2,
+                tcp_pos, last, [0, 1, 0], 2,
             ))
             items.append(pybullet.addUserDebugLine(
-                actual_end, pos, [1, 0, 0], 2,
+                last, pos, [1, 0, 0], 2,
             ))
-            _draw_crosshair(actual_end, [1, 0, 0], items)
-            print(f"  ⚠ {dev:.0f}mm Abweichung am Ziel")
+            ab_len = math.sqrt(sum((pos[i]-tcp_pos[i])**2 for i in range(3)))
+            t = math.sqrt(sum((last[i]-tcp_pos[i])**2 for i in range(3))) / ab_len if ab_len > 0 else 0
+            _, cur_quat = sim.get_tcp_pose()
+            mid_quat = pybullet.getQuaternionSlerp(
+                cur_quat, pybullet.getQuaternionFromEuler(ori), t,
+            )
+            target_pos = last
+            target_ori = list(pybullet.getEulerFromQuaternion(mid_quat))
+            print(f"  ⚠ {dev:.0f}mm Abweichung – fahre zu ({last[0]:.3f}, {last[1]:.3f}, {last[2]:.3f})")
         else:
             items.append(pybullet.addUserDebugLine(
                 tcp_pos, last, [0, 1, 0], 2,
@@ -512,6 +544,8 @@ def demo_simulation():
                 last, pos, [1, 0, 0], 2,
             ))
             _draw_crosshair(fail, [1, 0, 0], items)
+            target_pos = pos
+            target_ori = ori
             print(f"  ⛔ Kollision bei ({fail[0]:.3f}, {fail[1]:.3f}, {fail[2]:.3f})")
 
         try:
@@ -519,7 +553,7 @@ def demo_simulation():
         except (EOFError, KeyboardInterrupt):
             break
         if confirm in ("", "y", "yes"):
-            ok = sim.move_to(pos, ori, linear=linear, speed=speed)
+            ok = sim.move_to(target_pos, target_ori, linear=linear, speed=speed)
             if not ok:
                 _draw_crosshair(pos, [1, 0, 0], items,
                                 f"({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}) FEHLER")
