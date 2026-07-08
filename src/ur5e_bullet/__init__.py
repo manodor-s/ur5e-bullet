@@ -52,8 +52,10 @@ class UR5Sim():
 
         self._joint_ids = [self.joints[n].id for n in self.control_joints]
         self._null_space = (
-            [-math.pi]*6, [math.pi]*6, [2*math.pi]*6,
-            [0, -math.pi/2, -math.pi/2, -math.pi/2, -math.pi/2, 0],
+            [-math.pi, -math.pi, 0, -math.pi, -math.pi, -math.pi],
+            [math.pi, math.pi, math.pi, math.pi, math.pi, math.pi],
+            [2*math.pi]*6,
+            [0, -math.pi/2, math.pi/2, -math.pi/2, -math.pi/2, 0],
         )
         self._ik_lambda = 0.05
         self._collision_link_pairs = get_self_link_pairs(self.ur5, get_movable_joints(self.ur5))
