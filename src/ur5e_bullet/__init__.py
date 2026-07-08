@@ -20,6 +20,7 @@ class UR5Sim():
 
     def __init__(self, gui=True):
         pybullet.connect(pybullet.GUI if gui else pybullet.DIRECT)
+        pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_GUI, 0)
         pybullet.setRealTimeSimulation(True)
 
         self.end_effector_index = 7
