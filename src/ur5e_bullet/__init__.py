@@ -14,6 +14,7 @@ from pybullet_planning.interfaces.robots.joint import get_movable_joints
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 ROBOT_URDF_PATH = os.path.join(_PKG_DIR, "ur_e_description", "urdf", "ur5e.urdf")
 TABLE_URDF_PATH = os.path.join(pybullet_data.getDataPath(), "table/table.urdf")
+GEBISS_STL = os.path.join(_PKG_DIR, "..", "..", "data", "meshes", "Gebiss.stl")
 
 
 class UR5Sim():
@@ -74,6 +75,13 @@ class UR5Sim():
     def load_robot(self):
         self._table = pybullet.loadURDF(
             TABLE_URDF_PATH, [0.5, 0, -0.6300], [0, 0, 0, 1],
+        )
+        gebiss_vis = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=GEBISS_STL)
+        gebiss_col = pybullet.createCollisionShape(pybullet.GEOM_MESH, fileName=GEBISS_STL)
+        self._gebiss = pybullet.createMultiBody(
+            baseVisualShapeIndex=gebiss_vis,
+            baseCollisionShapeIndex=gebiss_col,
+            basePosition=[0.8, 0, 0.25],
         )
         return pybullet.loadURDF(
             ROBOT_URDF_PATH, [0, 0, 0], [0, 0, 0, 1],
@@ -459,6 +467,11 @@ class UR5Sim():
         if cf and hasattr(self, '_table'):
             cf = not any(
                 pybullet.getClosestPoints(self.ur5, self._table, 0.0, linkIndexA=i)
+                for i in range(-1, self.num_joints)
+            )
+        if cf and hasattr(self, '_gebiss'):
+            cf = not any(
+                pybullet.getClosestPoints(self.ur5, self._gebiss, 0.0, linkIndexA=i)
                 for i in range(-1, self.num_joints)
             )
         for i, v in zip(self._joint_ids, original):
