@@ -473,6 +473,10 @@ class UR5Sim():
         for i, v in zip(self._joint_ids, conf):
             pybullet.resetJointState(ghost, i, v)
         pybullet.resetBasePositionAndOrientation(ghost, [0, 0, 0], [0, 0, 0, 1])
+        actual_ee = pybullet.getLinkState(ghost, self.end_effector_index, computeForwardKinematics=True)
+        target_pos = self._last_collision_tcp_pose[0]
+        error = [target_pos[i] - actual_ee[0][i] for i in range(3)]
+        pybullet.resetBasePositionAndOrientation(ghost, error, [0, 0, 0, 1])
         pybullet.setCollisionFilterGroupMask(ghost, -1, 0, 0)
         for i in range(pybullet.getNumJoints(ghost)):
             pybullet.setCollisionFilterGroupMask(ghost, i, 0, 0)
