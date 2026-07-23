@@ -472,7 +472,7 @@ class UR5Sim():
             pybullet.changeVisualShape(ghost, i, rgbaColor=[0.2, 0.8, 1.0, 0.4])
         for i, v in zip(self._joint_ids, conf):
             pybullet.resetJointState(ghost, i, v)
-        pybullet.resetBasePositionAndOrientation(ghost, [0, 0, 0.001], [0, 0, 0, 1])
+        pybullet.resetBasePositionAndOrientation(ghost, [0, 0, 0], [0, 0, 0, 1])
         pybullet.setCollisionFilterGroupMask(ghost, -1, 0, 0)
         for i in range(pybullet.getNumJoints(ghost)):
             pybullet.setCollisionFilterGroupMask(ghost, i, 0, 0)
