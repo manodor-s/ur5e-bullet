@@ -66,6 +66,7 @@ class UR5Sim():
         self._last_conf = None
         self._last_target = None
         self._last_collision_tcp_pose = None
+        self._last_collision_conf = None
         self._ghost_body = None
         self._last_linear_error = None
         _color_links(self)
@@ -230,6 +231,7 @@ class UR5Sim():
                 return None
             if not self._joint_limits_ok(conf):
                 self._last_collision_tcp_pose = (pos, quat)
+                self._last_collision_conf = conf
                 for idx, v in enumerate(conf):
                     if not (self._null_space[0][idx] <= v <= self._null_space[1][idx]):
                         self._last_linear_error = ("limit", i, idx)
@@ -239,6 +241,7 @@ class UR5Sim():
                 return None
             if not self._collision_free(conf):
                 self._last_collision_tcp_pose = (pos, quat)
+                self._last_collision_conf = conf
                 self._last_linear_error = ("collision", i)
                 for j, v in zip(self._joint_ids, initial_state):
                     pybullet.resetJointState(self.ur5, j, v)
@@ -347,7 +350,9 @@ class UR5Sim():
     def _probe_linear_stepwise(self, ee_start, ee_target, start_tcp):
         num_steps = 100
         seed_configuration = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-        last_valid_position = ee_start[0]
+        last_good_conf = list(seed_configuration)
+        last_good_fraction = 0.0
+        failed = False
 
         for i in range(1, num_steps + 1):
             fraction = i / num_steps
@@ -358,13 +363,26 @@ class UR5Sim():
             interpolated_orientation = pybullet.getQuaternionSlerp(ee_start[1], ee_target[1], fraction)
             configuration = self._ik((target_position_at_t, interpolated_orientation), seed=seed_configuration)
             if configuration is None:
-                return start_tcp, target_position_at_t, 0.0, start_tcp, None
+                self._last_collision_conf = last_good_conf
+                failed = True
+                break
             if not self._collision_free(configuration):
-                self._last_collision_tcp_pose = (target_position_at_t, interpolated_orientation)
-                return start_tcp, target_position_at_t, 0.0, start_tcp, None
+                self._last_collision_conf = last_good_conf
+                failed = True
+                break
             seed_configuration = configuration
-            last_valid_position = target_position_at_t
+            last_good_conf = list(configuration)
+            last_good_fraction = fraction
 
+        last_valid_position = [
+            ee_start[0][j] + last_good_fraction * (ee_target[0][j] - ee_start[0][j])
+            for j in range(3)
+        ]
+        if failed:
+            last_valid_orientation = pybullet.getQuaternionSlerp(
+                ee_start[1], ee_target[1], last_good_fraction)
+            self._last_collision_tcp_pose = (last_valid_position, last_valid_orientation)
+            return last_valid_position, target_position_at_t, 0.0, last_valid_position, None
         return last_valid_position, None, 0.0, last_valid_position, None
 
     def _probe_linear(self, target_pos, target_ori):
@@ -389,6 +407,7 @@ class UR5Sim():
 
     def _probe_path(self, target_pos, target_ori, rrt=False):
         self._last_linear_error = None
+        self._last_collision_conf = None
         if rrt:
             return self._probe_rrt(target_pos, target_ori)
         return self._probe_linear(target_pos, target_ori)
@@ -429,7 +448,8 @@ class UR5Sim():
             return
         self._remove_ghost()
         current = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-        conf = self._ik(self._last_collision_tcp_pose, seed=current)
+        seed = self._last_collision_conf if self._last_collision_conf is not None else current
+        conf = self._ik(self._last_collision_tcp_pose, seed=seed)
         for j, v in zip(self._joint_ids, current):
             pybullet.resetJointState(self.ur5, j, v)
         if conf is None:
@@ -734,7 +754,7 @@ def demo_simulation():
         items.append(pybullet.addUserDebugLine(
             last_valid_position, target_position, [1, 0, 0], 2,
         ))
-        _draw_crosshair(collision_position, [1, 0, 0], items)
+        _draw_crosshair(last_valid_position, [1, 0, 0], items)
         if not linear:
             print(f"  ⛔ Kein RRT-Pfad zu ({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f})")
         else:
@@ -819,6 +839,7 @@ def demo_simulation():
                         f"({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f})")
 
         sim._last_collision_tcp_pose = None
+        sim._last_collision_conf = None
         sim._remove_ghost()
 
         probe_result = sim._probe_path(target_position, target_orientation, rrt=not linear)
