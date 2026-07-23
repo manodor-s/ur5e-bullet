@@ -202,7 +202,8 @@ class UR5Sim():
             for j, v in zip(self._joint_ids, conf):
                 pybullet.resetJointState(self.ur5, j, v)
             pybullet.stepSimulation()
-            print(f"\r{_joint_deviation_line(self)}", end="", flush=True)
+            pos, _ = self.get_tcp_pose()
+            print(f"\rX {pos[0]:.3f} Y {pos[1]:.3f} Z {pos[2]:.3f}  {_joint_deviation_line(self, short=True)}", end="", flush=True)
             if speed > 0:
                 time.sleep(0.01 / speed)
         print()
@@ -243,6 +244,20 @@ class UR5Sim():
                 self._last_collision_tcp_pose = (pos, quat)
                 self._last_collision_conf = conf
                 self._last_linear_error = ("collision", i)
+                for j, v in zip(self._joint_ids, initial_state):
+                    pybullet.resetJointState(self.ur5, j, v)
+                return None
+            saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
+            for j, v in zip(self._joint_ids, conf):
+                pybullet.resetJointState(self.ur5, j, v)
+            ls = pybullet.getLinkState(self.ur5, self.end_effector_index, computeForwardKinematics=True)
+            fk_err = math.sqrt(sum((ls[0][j] - pos[j])**2 for j in range(3)))
+            for j, v in zip(self._joint_ids, saved):
+                pybullet.resetJointState(self.ur5, j, v)
+            if fk_err > 0.002:
+                self._last_collision_tcp_pose = (pos, quat)
+                self._last_collision_conf = path[-1] if path else initial_state
+                self._last_linear_error = ("fk", i)
                 for j, v in zip(self._joint_ids, initial_state):
                     pybullet.resetJointState(self.ur5, j, v)
                 return None
@@ -349,6 +364,7 @@ class UR5Sim():
 
     def _probe_linear_stepwise(self, ee_start, ee_target, start_tcp):
         num_steps = 100
+        fk_tol = 0.0005
         seed_configuration = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
         last_good_conf = list(seed_configuration)
         last_good_fraction = 0.0
@@ -367,6 +383,17 @@ class UR5Sim():
                 failed = True
                 break
             if not self._collision_free(configuration):
+                self._last_collision_conf = last_good_conf
+                failed = True
+                break
+            saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
+            for j, v in zip(self._joint_ids, configuration):
+                pybullet.resetJointState(self.ur5, j, v)
+            ls = pybullet.getLinkState(self.ur5, self.end_effector_index, computeForwardKinematics=True)
+            fk_err = math.sqrt(sum((ls[0][j] - target_position_at_t[j])**2 for j in range(3)))
+            for j, v in zip(self._joint_ids, saved):
+                pybullet.resetJointState(self.ur5, j, v)
+            if fk_err > fk_tol:
                 self._last_collision_conf = last_good_conf
                 failed = True
                 break
@@ -447,11 +474,7 @@ class UR5Sim():
         if self._last_collision_tcp_pose is None:
             return
         self._remove_ghost()
-        current = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-        seed = self._last_collision_conf if self._last_collision_conf is not None else current
-        conf = self._ik(self._last_collision_tcp_pose, seed=seed)
-        for j, v in zip(self._joint_ids, current):
-            pybullet.resetJointState(self.ur5, j, v)
+        conf = self._last_collision_conf
         if conf is None:
             return
         devnull_fd = os.open(os.devnull, os.O_WRONLY)
@@ -508,12 +531,15 @@ class UR5Sim():
             self._last_linear_error = matches[0] if matches else err1
         return path
 
-    def move_to(self, tcp_pos, tcp_ori, linear=True, obstacles=[], tol=0.08, speed=1.0):
+    def move_to(self, tcp_pos, tcp_ori, linear=True, obstacles=[], tol=0.08, speed=1.0, target_conf=None):
         ee_target = self._tcp_to_ee(tcp_pos, tcp_ori)
         render_flag = pybullet.COV_ENABLE_RENDERING
         pybullet.configureDebugVisualizer(render_flag, 0)
         current_joints = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-        target_configuration = self._conf_for(ee_target, seed=current_joints)
+        if target_conf is not None:
+            target_configuration = target_conf
+        else:
+            target_configuration = self._conf_for(ee_target, seed=current_joints)
         if target_configuration is None:
             pybullet.configureDebugVisualizer(render_flag, 1)
             print(f"[nein] Ziel {tcp_pos} nicht erreichbar")
@@ -582,6 +608,8 @@ class UR5Sim():
             pybullet.configureDebugVisualizer(render_flag, 1)
             print(f"[nein] Kein Pfad zu {tcp_pos}")
             return False
+        if target_conf is not None:
+            path[-1] = list(target_conf)
         return run(path)
 
     def _save_last(self, tcp_pos, tcp_ori):
@@ -689,8 +717,8 @@ def _color_links(sim):
         pybullet.changeVisualShape(sim.ur5, jid, rgbaColor=[ratio, 1 - ratio, 0, 1])
 
 
-def _joint_deviation_line(sim):
-    names = ["pan", "lift", "elbow", "w1", "w2", "w3"]
+def _joint_deviation_line(sim, short=False):
+    names = ["pa", "li", "el", "w1", "w2", "w3"] if short else ["pan", "lift", "elbow", "w1", "w2", "w3"]
     parts = []
     for i, jid in enumerate(sim._joint_ids):
         angle = pybullet.getJointState(sim.ur5, jid)[0]
@@ -704,6 +732,8 @@ def _joint_deviation_line(sim):
         r = min(255, int(ratio * 255))
         g = min(255, int((1 - ratio) * 255))
         parts.append(f"\033[38;2;{r};{g};0m{names[i]}{deg:+6.0f}°\033[0m")
+    if short:
+        return " ".join(parts)
     return "Gelenke: " + " ".join(parts)
 
 
@@ -861,9 +891,25 @@ def demo_simulation():
 
         if collision_position is not None:
             sim._show_ghost()
-            ok = False
+            reachable_distance = math.sqrt(sum((last_valid_position[i]-tcp_pos[i])**2 for i in range(3)))
+            target_distance = math.sqrt(sum((target_position[i]-tcp_pos[i])**2 for i in range(3)))
+            if reachable_distance > 0.005 and target_distance > 0:
+                fraction = reachable_distance / target_distance
+                _, current_orientation = sim.get_tcp_pose()
+                mid_orientation = pybullet.getQuaternionSlerp(
+                    current_orientation, pybullet.getQuaternionFromEuler(target_orientation), fraction,
+                )
+                try:
+                    confirm = input("  Zum Ghost-Punkt bewegen? [Y/n] ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if confirm in ("", "y", "yes"):
+                    ok = sim.move_to(last_valid_position, list(pybullet.getEulerFromQuaternion(mid_orientation)), linear=linear, speed=current_speed, target_conf=sim._last_collision_conf)
+                else:
+                    ok = False
+            else:
+                ok = False
         else:
-            sim._remove_ghost()
             try:
                 confirm = input("  Ausführen? [Y/n] ").strip().lower()
             except (EOFError, KeyboardInterrupt):
@@ -871,10 +917,10 @@ def demo_simulation():
             ok = False
             if confirm in ("", "y", "yes"):
                 ok = sim.move_to(target_pos, target_ori, linear=linear, speed=current_speed)
-            if not ok:
-                _draw_crosshair(target_position, [1, 0, 0], items,
-                                f"({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f}) FEHLER")
 
+        sim._remove_ghost()
+        pybullet.removeAllUserDebugItems()
+        items.clear()
         tcp_items = draw_tcp()
 
 
