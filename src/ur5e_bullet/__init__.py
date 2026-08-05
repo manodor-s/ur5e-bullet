@@ -8,6 +8,8 @@ import pybullet_data
 from collections import namedtuple
 
 from pybullet_planning import plan_joint_motion
+from pybullet_planning.motion_planners.smoothing import refine_waypoints
+from pybullet_planning.interfaces.planner_interface.joint_motion_planning import get_extend_fn
 from pybullet_planning.interfaces.robots.link import get_self_link_pairs
 from pybullet_planning.interfaces.robots.joint import get_movable_joints
 
@@ -81,7 +83,8 @@ class UR5Sim():
         self._gebiss = pybullet.createMultiBody(
             baseVisualShapeIndex=gebiss_vis,
             baseCollisionShapeIndex=gebiss_col,
-            basePosition=[0.8, 0, 0.25],
+            basePosition=[0.85, 0, 0.3],
+            baseOrientation=pybullet.getQuaternionFromEuler([0, 0, -math.pi / 2]),
         )
         return pybullet.loadURDF(
             ROBOT_URDF_PATH, [0, 0, 0], [0, 0, 0, 1],
@@ -310,15 +313,19 @@ class UR5Sim():
         devnull_fd = os.open(os.devnull, os.O_WRONLY)
         saved_stderr_fd = os.dup(2)
         os.dup2(devnull_fd, 2)
+        random.seed(0)
+        np.random.seed(0)
         path = plan_joint_motion(
             self.ur5, self._joint_ids, target_configuration,
-            obstacles=[], self_collisions=True,
-            restarts=10, smooth=30,
+            obstacles=self._obstacles(), self_collisions=True,
+            restarts=30, smooth=30,
         )
         os.dup2(saved_stderr_fd, 2)
         os.close(devnull_fd)
 
         if path is not None:
+            extend_fn = get_extend_fn(self.ur5, self._joint_ids)
+            path = list(refine_waypoints(path, extend_fn))
             tcp_waypoints = []
             for configuration in path:
                 for j, v in zip(self._joint_ids, configuration):
@@ -478,6 +485,14 @@ class UR5Sim():
             pybullet.resetJointState(self.ur5, i, v)
         return cf
 
+    def _obstacles(self):
+        obs = []
+        if hasattr(self, '_table'):
+            obs.append(self._table)
+        if hasattr(self, '_gebiss'):
+            obs.append(self._gebiss)
+        return obs
+
     def _remove_ghost(self):
         if self._ghost_body is not None:
             pybullet.removeBody(self._ghost_body)
@@ -544,7 +559,9 @@ class UR5Sim():
             self._last_linear_error = matches[0] if matches else err1
         return path
 
-    def move_to(self, tcp_pos, tcp_ori, linear=True, obstacles=[], tol=0.08, speed=1.0, target_conf=None):
+    def move_to(self, tcp_pos, tcp_ori, linear=True, obstacles=None, tol=0.08, speed=1.0, target_conf=None):
+        if obstacles is None:
+            obstacles = self._obstacles()
         ee_target = self._tcp_to_ee(tcp_pos, tcp_ori)
         render_flag = pybullet.COV_ENABLE_RENDERING
         pybullet.configureDebugVisualizer(render_flag, 0)
@@ -612,15 +629,19 @@ class UR5Sim():
             pybullet.configureDebugVisualizer(render_flag, 1)
             print(f"[nein] Ziel {tcp_pos} kollidiert")
             return False
+        random.seed(0)
+        np.random.seed(0)
         path = plan_joint_motion(
             self.ur5, self._joint_ids, target_configuration,
             obstacles=obstacles, self_collisions=True,
-            restarts=10, smooth=30,
+            restarts=30, smooth=30,
         )
         if path is None:
             pybullet.configureDebugVisualizer(render_flag, 1)
             print(f"[nein] Kein Pfad zu {tcp_pos}")
             return False
+        extend_fn = get_extend_fn(self.ur5, self._joint_ids)
+        path = list(refine_waypoints(path, extend_fn))
         if target_conf is not None:
             path[-1] = list(target_conf)
         return run(path)
@@ -903,10 +924,10 @@ def demo_simulation():
         )
 
         if collision_position is not None:
-            sim._show_ghost()
             reachable_distance = math.sqrt(sum((last_valid_position[i]-tcp_pos[i])**2 for i in range(3)))
             target_distance = math.sqrt(sum((target_position[i]-tcp_pos[i])**2 for i in range(3)))
             if reachable_distance > 0.005 and target_distance > 0:
+                sim._show_ghost()
                 fraction = reachable_distance / target_distance
                 _, current_orientation = sim.get_tcp_pose()
                 mid_orientation = pybullet.getQuaternionSlerp(
@@ -921,6 +942,7 @@ def demo_simulation():
                 else:
                     ok = False
             else:
+                print("  Ziel von aktueller Position aus unerreichbar (kein gültiger Zwischenpunkt)")
                 ok = False
         else:
             try:

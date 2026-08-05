@@ -205,6 +205,31 @@
       <origin rpy="0 0 0" xyz="-0.01 0 0"/>
     </collision>
   </link>
+  <link name="scanner_link">
+    <visual>
+      <geometry>
+        <mesh filename="../meshes/scanner-stab.stl"/>
+      </geometry>
+      <material name="ScannerGrey">
+        <color rgba="0.4 0.4 0.4 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="../meshes/scanner-stab.stl"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.11"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.0001"/>
+    </inertial>
+  </link>
+  <joint name="scanner_joint" type="fixed">
+    <parent link="ee_link"/>
+    <child link="scanner_link"/>
+    <origin rpy="0 1.57079632679 0" xyz="0 0 0.002"/>
+  </joint>
   <transmission name="shoulder_pan_trans">
     <type>transmission_interface/SimpleTransmission</type>
     <joint name="shoulder_pan_joint">
