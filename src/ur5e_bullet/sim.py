@@ -13,6 +13,8 @@ from pybullet_planning.interfaces.planner_interface.joint_motion_planning import
 from pybullet_planning.interfaces.robots.link import get_self_link_pairs
 from pybullet_planning.interfaces.robots.joint import get_movable_joints
 
+from .blender_link import BlenderMirror
+
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 ROBOT_URDF_PATH = os.path.join(_PKG_DIR, "ur_e_description", "urdf", "ur5e.urdf")
 TABLE_URDF_PATH = os.path.join(pybullet_data.getDataPath(), "table/table.urdf")
@@ -23,7 +25,7 @@ GEBISS_SCALE = [0.001, 0.001, 0.001]
 
 class UR5Sim():
 
-    def __init__(self, gui=True):
+    def __init__(self, gui=True, mirror=None):
         pybullet.connect(pybullet.GUI if gui else pybullet.DIRECT)
         pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_GUI, 0)
         pybullet.setRealTimeSimulation(True)
@@ -74,6 +76,11 @@ class UR5Sim():
         self._last_collision_conf = None
         self._ghost_body = None
         self._last_linear_error = None
+        if mirror is None:
+            mirror = gui
+        self._mirror = BlenderMirror(self) if mirror else None
+        if self._mirror is not None:
+            self._mirror.send_current()
         _color_links(self)
 
     def load_robot(self):
@@ -105,6 +112,8 @@ class UR5Sim():
             positionGains=[0.04]*6,
             forces=[self.joints[n].maxForce for n in self.control_joints],
         )
+        if self._mirror is not None:
+            self._mirror.send_current()
 
     def get_joint_angles(self):
         return [s[0] for s in pybullet.getJointStates(self.ur5, [1, 2, 3, 4, 5, 6])]
@@ -218,6 +227,8 @@ class UR5Sim():
             for j, v in zip(self._joint_ids, conf):
                 pybullet.resetJointState(self.ur5, j, v)
             pybullet.stepSimulation()
+            if self._mirror is not None:
+                self._mirror.send_current()
             pos, _ = self.get_tcp_pose()
             print(f"\rX {pos[0]:.3f} Y {pos[1]:.3f} Z {pos[2]:.3f}  {_joint_deviation_line(self, short=True)}", end="", flush=True)
             if speed > 0:
@@ -465,6 +476,8 @@ class UR5Sim():
     def _probe_path(self, target_pos, target_ori, rrt=False):
         self._last_linear_error = None
         self._last_collision_conf = None
+        if self._mirror is not None:
+            self._mirror.send_current()
         if rrt:
             return self._probe_rrt(target_pos, target_ori)
         return self._probe_linear(target_pos, target_ori)
@@ -664,6 +677,8 @@ class UR5Sim():
     def _save_last(self, tcp_pos, tcp_ori):
         self._last_conf = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
         self._last_target = (tcp_pos, tcp_ori)
+        if self._mirror is not None:
+            self._mirror.send_current()
 
     def get_current_pose(self):
         ls = pybullet.getLinkState(

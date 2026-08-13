@@ -198,51 +198,59 @@ def parent_meshes(arm_obj, meshes, data):
 
 
 def add_scanner_and_camera(arm_obj, meshes):
-    scanner_path = os.path.join(OBJ_DIR, "rough_scanner.obj")
+    scanner_path = os.path.join(ROOT, "src", "ur5e_bullet", "ur_e_description", "meshes", "scanner-stab.stl")
     if not os.path.exists(scanner_path):
-        print("  - rough_scanner.obj nicht gefunden")
+        print("  - scanner-stab.stl nicht gefunden")
         return
 
-    bpy.ops.wm.obj_import(filepath=scanner_path)
+    try:
+        bpy.ops.wm.stl_import(filepath=scanner_path)
+    except Exception:
+        bpy.ops.wm.import_mesh.stl(filepath=scanner_path)
     obj = bpy.context.active_object
     if not obj or obj.type != "MESH":
         print("  ! Scanner-Import fehlgeschlagen")
         return
 
-    obj.name = "rough_scanner"
+    obj.name = "scanner_stab"
     obj.scale = (S, S, S)
-    obj.rotation_euler = (math.radians(90), 0, 0)
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
-    bpy.ops.object.transform_apply(rotation=True, scale=True)
+    bpy.ops.object.transform_apply(scale=True)
 
     obj.parent = arm_obj
     obj.parent_type = "BONE"
     obj.parent_bone = "wrist_3_joint"
     obj.matrix_parent_inverse = Matrix.Identity(4)
-    obj.location = Vector((0, 0.16 * S, 0))
-    obj.rotation_euler = (0, math.radians(90), 0)
-    meshes["rough_scanner"] = obj
-    print("  + rough_scanner -> wrist_3_joint")
+    # Bone-lokale Transform des scanner_link-Frames (verifiziert gegen pybullet),
+    # inkl. Blender-Bone-Binding am Tail (bone length 0.05 m -> 0.5 BU Y-Offset):
+    # loc (0.02, 0.5, 0) BU, Rotation -> Quaternion (w,x,y,z)=(0,0,0.7071,0.7071)
+    obj.location = Vector((0.02, 0.5, 0.0))
+    obj.rotation_mode = "QUATERNION"
+    obj.rotation_quaternion = (0.0, 0.0, 0.7071, 0.7071)
+    meshes["scanner_stab"] = obj
+    print("  + scanner_stab -> wrist_3_joint")
 
     bpy.ops.object.camera_add()
     cam = bpy.context.active_object
     cam.name = "ScannerCamera"
     cam.parent = obj
     cam.matrix_parent_inverse = Matrix.Identity(4)
-    cam.location = Vector((0, 0.1 * S, -0.01*S))
-    print("  + ScannerCamera -> rough_scanner (tip)")
+    cam.location = Vector((0, 0, 0.1 * S))
+    cam.rotation_euler = (math.radians(180), 0, 0)
+    print("  + ScannerCamera -> scanner_stab (Blick entlang Stabachse)")
 
     bpy.ops.object.light_add(type="SPOT")
     light = bpy.context.active_object
     light.name = "ScannerLight"
     light.parent = obj
     light.matrix_parent_inverse = Matrix.Identity(4)
-    light.location = Vector((0, 0.1 * S, -0.01 * S))
+    light.location = Vector((0, 0, 0.05 * S))
+    light.rotation_euler = (math.radians(180), 0, 0)
     light.data.energy = 3
     light.data.spot_size = math.radians(60)
-    print("  + ScannerLight -> rough_scanner (tip)")
+    print("  + ScannerLight -> scanner_stab (Blick entlang Stabachse)")
 
 
 def add_gebissstand():
