@@ -96,6 +96,16 @@ def _apply_joints(joints):
         bone.rotation_euler = (0.0, angle, 0.0)
 
 
+def _apply_tcp(tcp):
+    if not tcp or len(tcp) < 3:
+        return
+    pos = (tcp[0] * rig.S, tcp[1] * rig.S, tcp[2] * rig.S)
+    for name in ("ScannerCamera", "ScannerLight"):
+        obj = bpy.data.objects.get(name)
+        if obj is not None:
+            obj.location = pos
+
+
 def poll():
     global _buffer
     try:
@@ -118,6 +128,8 @@ def poll():
             continue
         if "joints" in msg:
             _apply_joints(msg["joints"])
+        if "tcp" in msg:
+            _apply_tcp(msg["tcp"])
     return 0.05
 
 

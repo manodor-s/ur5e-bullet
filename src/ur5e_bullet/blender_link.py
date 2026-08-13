@@ -88,7 +88,12 @@ class BlenderMirror:
             joints = self.sim.get_joint_angles()
         except Exception:
             return
-        self.send_message({"joints": joints})
+        msg = {"joints": joints}
+        try:
+            msg["tcp"] = self.sim.get_tcp_in_scanner_frame()
+        except Exception:
+            pass
+        self.send_message(msg)
 
     def send_message(self, payload):
         if not self._connected or self._conn is None:

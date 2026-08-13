@@ -68,8 +68,8 @@ class UR5Sim():
         self._ik_lambda = 0.05
         self._collision_link_pairs = get_self_link_pairs(self.ur5, get_movable_joints(self.ur5))
 
-        self.tool_offset_pos = None
-        self.tool_offset_orn = None
+        self.tool_offset_pos = [0.213, 0, -0.006]
+        self.tool_offset_orn = [0, 0, 0, 1]
         self._last_conf = None
         self._last_target = None
         self._last_collision_tcp_pose = None
@@ -689,10 +689,14 @@ class UR5Sim():
     def set_tool_offset(self, pos, ori=(0, 0, 0, 1)):
         self.tool_offset_pos = list(pos)
         self.tool_offset_orn = list(ori)
+        if self._mirror is not None:
+            self._mirror.send_current()
 
     def clear_tool_offset(self):
         self.tool_offset_pos = None
         self.tool_offset_orn = None
+        if self._mirror is not None:
+            self._mirror.send_current()
 
     def get_tcp_pose(self):
         pos, quat = self.get_current_pose()
@@ -703,6 +707,14 @@ class UR5Sim():
                 [0, 0, 0], quat, self.tool_offset_pos, self.tool_offset_orn
             )[1]
         return pos, quat
+
+    def get_tcp_in_scanner_frame(self):
+        tcp_world, _ = self.get_tcp_pose()
+        scanner = self.joints["scanner_joint"].id
+        sc = pybullet.getLinkState(self.ur5, scanner, computeForwardKinematics=True)
+        R = np.array(pybullet.getMatrixFromQuaternion(sc[5])).reshape(3, 3)
+        local = R.T @ (np.array(tcp_world) - np.array(sc[4]))
+        return [float(v) for v in local]
 
 
 def _color_links(sim):

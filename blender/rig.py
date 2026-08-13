@@ -237,20 +237,20 @@ def add_scanner_and_camera(arm_obj, meshes):
     cam.name = "ScannerCamera"
     cam.parent = obj
     cam.matrix_parent_inverse = Matrix.Identity(4)
-    cam.location = Vector((0, 0, 0.1 * S))
-    cam.rotation_euler = (math.radians(180), 0, 0)
-    print("  + ScannerCamera -> scanner_stab (Blick entlang Stabachse)")
+    cam.location = Vector((0.08, 0, 2.13))
+    cam.rotation_euler = (0, math.radians(-90), 0)
+    print("  + ScannerCamera -> scanner_stab (Position = Pybullet-TCP, Blick +Z-Welt)")
 
     bpy.ops.object.light_add(type="SPOT")
     light = bpy.context.active_object
     light.name = "ScannerLight"
     light.parent = obj
     light.matrix_parent_inverse = Matrix.Identity(4)
-    light.location = Vector((0, 0, 0.05 * S))
-    light.rotation_euler = (math.radians(180), 0, 0)
+    light.location = Vector((0.08, 0, 2.13))
+    light.rotation_euler = (0, math.radians(-90), 0)
     light.data.energy = 3
     light.data.spot_size = math.radians(60)
-    print("  + ScannerLight -> scanner_stab (Blick entlang Stabachse)")
+    print("  + ScannerLight -> scanner_stab (Position = Pybullet-TCP, Blick +Z-Welt)")
 
 
 def add_gebissstand():
