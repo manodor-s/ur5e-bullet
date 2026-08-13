@@ -16,7 +16,9 @@ from pybullet_planning.interfaces.robots.joint import get_movable_joints
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 ROBOT_URDF_PATH = os.path.join(_PKG_DIR, "ur_e_description", "urdf", "ur5e.urdf")
 TABLE_URDF_PATH = os.path.join(pybullet_data.getDataPath(), "table/table.urdf")
-GEBISS_STL = os.path.join(_PKG_DIR, "..", "..", "data", "meshes", "Gebiss.stl")
+GEBISS_STL = os.path.join(_PKG_DIR, "..", "..", "data", "meshes_jaws", "1", "lower.stl")
+GEBISS_COLL_STL = os.path.join(_PKG_DIR, "..", "..", "data", "meshes_jaws", "1", "lower_coll.stl")
+GEBISS_SCALE = [0.001, 0.001, 0.001]
 
 
 class UR5Sim():
@@ -78,13 +80,16 @@ class UR5Sim():
         self._table = pybullet.loadURDF(
             TABLE_URDF_PATH, [0.5, 0, -0.6300], [0, 0, 0, 1],
         )
-        gebiss_vis = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=GEBISS_STL)
-        gebiss_col = pybullet.createCollisionShape(pybullet.GEOM_MESH, fileName=GEBISS_STL)
+        gebiss_vis = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=GEBISS_STL, meshScale=GEBISS_SCALE)
+        gebiss_col = pybullet.createCollisionShape(
+            pybullet.GEOM_MESH, fileName=GEBISS_COLL_STL, meshScale=GEBISS_SCALE,
+            flags=pybullet.GEOM_FORCE_CONCAVE_TRIMESH,
+        )
         self._gebiss = pybullet.createMultiBody(
             baseVisualShapeIndex=gebiss_vis,
             baseCollisionShapeIndex=gebiss_col,
             basePosition=[0.85, 0, 0.3],
-            baseOrientation=pybullet.getQuaternionFromEuler([0, 0, -math.pi / 2]),
+            baseOrientation=pybullet.getQuaternionFromEuler([0, 0, math.pi / 2]),
         )
         return pybullet.loadURDF(
             ROBOT_URDF_PATH, [0, 0, 0], [0, 0, 0, 1],
