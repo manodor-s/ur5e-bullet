@@ -1,5 +1,4 @@
 import json
-import math
 import os
 import socket
 import sys
@@ -8,12 +7,6 @@ import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rig
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-JAW_STL = os.path.join(ROOT, "data", "meshes_jaws", "1", "lower.stl")
-JAW_POS = (8.5, 0, 3.0)
-JAW_ROT = (0, 0, math.radians(90))
-JAW_SCALE = 0.01
 
 CONTROL_JOINTS = [
     "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
@@ -24,14 +17,6 @@ _conn = None
 _buffer = ""
 
 
-def _import_stl(path):
-    try:
-        bpy.ops.wm.stl_import(filepath=path)
-    except Exception:
-        bpy.ops.wm.import_mesh.stl(filepath=path)
-    return bpy.context.active_object
-
-
 def build_scene():
     rig.clear_scene()
     data = rig.load_urdf_data()
@@ -40,7 +25,8 @@ def build_scene():
     arm_obj.show_in_front = True
     rig.parent_meshes(arm_obj, meshes, data)
     rig.add_scanner_and_camera(arm_obj, meshes)
-    add_jaw()
+    rig.add_lower_jaw()
+    rig.setup_render()
     bpy.context.scene.frame_set(1)
     for area in bpy.context.screen.areas:
         if area.type == "VIEW_3D":
@@ -48,22 +34,6 @@ def build_scene():
                 if space.type == "VIEW_3D":
                     space.shading.type = "SOLID"
     print("[mirror] Szene aufgebaut")
-
-
-def add_jaw():
-    if not os.path.exists(JAW_STL):
-        print(f"[mirror] Kiefer fehlt: {JAW_STL}")
-        return
-    obj = _import_stl(JAW_STL)
-    obj.name = "gebiss_lower"
-    obj.scale = (JAW_SCALE, JAW_SCALE, JAW_SCALE)
-    obj.location = JAW_POS
-    obj.rotation_euler = JAW_ROT
-    bpy.ops.object.select_all(action="DESELECT")
-    obj.select_set(True)
-    bpy.context.view_layer.objects.active = obj
-    bpy.ops.object.transform_apply(scale=True)
-    print(f"[mirror] + Kiefer -> {JAW_POS}")
 
 
 def connect(port):

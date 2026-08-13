@@ -2,7 +2,7 @@ import bpy
 import math
 import os
 import json
-from mathutils import Vector, Euler, Matrix
+from mathutils import Vector, Euler, Matrix, Quaternion
 
 def _script_dir():
     candidates = []
@@ -30,7 +30,21 @@ SCRIPT_DIR = _script_dir()
 ROOT = os.path.dirname(SCRIPT_DIR)
 POSE_JSON = os.path.join(ROOT, "data", "urdf_data.json")
 OBJ_DIR = os.path.join(ROOT, "data", "meshes")
-S = 10
+S = 1
+
+CAMERA_ROLL = math.radians(-90)
+CAMERA_SENSOR_W = 36.0
+# RealSense D455: nativer 16:9-Sensor (1280x720) -> H = W * 9/16
+CAMERA_SENSOR_H = CAMERA_SENSOR_W * 9 / 16
+# RealSense D455 (breiteste FOV): 87° H x 58° V
+CAMERA_FOV = math.radians(87)
+CAMERA_LENS_MM = CAMERA_SENSOR_W / (2 * math.tan(CAMERA_FOV / 2))
+CAMERA_NEAR_M = 0.001
+CAMERA_FAR_M = 0.1
+CAMERA_DISPLAY_M = 0.2
+# D455 nativer Aspect 16:9 (1280x720), Render in 8K
+RENDER_W = 7680
+RENDER_H = 4320
 
 MESH_ROTATIONS = {
     "base_link": (math.radians(90), 0, 0),
@@ -197,17 +211,21 @@ def parent_meshes(arm_obj, meshes, data):
         print(f"  + {link_name} -> {bone_name}")
 
 
+def _import_stl(path):
+    try:
+        bpy.ops.wm.stl_import(filepath=path)
+    except Exception:
+        bpy.ops.wm.import_mesh.stl(filepath=path)
+    return bpy.context.active_object
+
+
 def add_scanner_and_camera(arm_obj, meshes):
     scanner_path = os.path.join(ROOT, "src", "ur5e_bullet", "ur_e_description", "meshes", "scanner-stab.stl")
     if not os.path.exists(scanner_path):
         print("  - scanner-stab.stl nicht gefunden")
         return
 
-    try:
-        bpy.ops.wm.stl_import(filepath=scanner_path)
-    except Exception:
-        bpy.ops.wm.import_mesh.stl(filepath=scanner_path)
-    obj = bpy.context.active_object
+    obj = _import_stl(scanner_path)
     if not obj or obj.type != "MESH":
         print("  ! Scanner-Import fehlgeschlagen")
         return
@@ -224,9 +242,9 @@ def add_scanner_and_camera(arm_obj, meshes):
     obj.parent_bone = "wrist_3_joint"
     obj.matrix_parent_inverse = Matrix.Identity(4)
     # Bone-lokale Transform des scanner_link-Frames (verifiziert gegen pybullet),
-    # inkl. Blender-Bone-Binding am Tail (bone length 0.05 m -> 0.5 BU Y-Offset):
-    # loc (0.02, 0.5, 0) BU, Rotation -> Quaternion (w,x,y,z)=(0,0,0.7071,0.7071)
-    obj.location = Vector((0.02, 0.5, 0.0))
+    # inkl. Blender-Bone-Binding am Tail (bone length 0.05 m -> 0.05*S BU Y-Offset):
+    # loc (0.002*S, 0.05*S, 0) BU, Rotation -> Quaternion (w,x,y,z)=(0,0,0.7071,0.7071)
+    obj.location = Vector((0.002 * S, 0.05 * S, 0.0))
     obj.rotation_mode = "QUATERNION"
     obj.rotation_quaternion = (0.0, 0.0, 0.7071, 0.7071)
     meshes["scanner_stab"] = obj
@@ -235,10 +253,19 @@ def add_scanner_and_camera(arm_obj, meshes):
     bpy.ops.object.camera_add()
     cam = bpy.context.active_object
     cam.name = "ScannerCamera"
+    cam.data.angle = CAMERA_FOV
+    cam.data.sensor_width = CAMERA_SENSOR_W
+    cam.data.sensor_height = CAMERA_SENSOR_H
+    cam.data.sensor_fit = "AUTO"
+    cam.data.clip_start = CAMERA_NEAR_M * S
+    cam.data.clip_end = CAMERA_FAR_M * S
+    cam.data.display_size = CAMERA_DISPLAY_M * S
     cam.parent = obj
     cam.matrix_parent_inverse = Matrix.Identity(4)
-    cam.location = Vector((0.08, 0, 2.13))
-    cam.rotation_euler = (0, math.radians(-90), 0)
+    cam.location = Vector((0.008 * S, 0, 0.213 * S))
+    cam.rotation_mode = "QUATERNION"
+    base_q = Euler((0, math.radians(-90), 0), "XYZ").to_quaternion()
+    cam.rotation_quaternion = base_q @ Quaternion((0, 0, 1), CAMERA_ROLL)
     print("  + ScannerCamera -> scanner_stab (Position = Pybullet-TCP, Blick +Z-Welt)")
 
     bpy.ops.object.light_add(type="SPOT")
@@ -246,34 +273,41 @@ def add_scanner_and_camera(arm_obj, meshes):
     light.name = "ScannerLight"
     light.parent = obj
     light.matrix_parent_inverse = Matrix.Identity(4)
-    light.location = Vector((0.08, 0, 2.13))
+    light.location = Vector((0.008 * S, 0, 0.213 * S))
     light.rotation_euler = (0, math.radians(-90), 0)
     light.data.energy = 3
     light.data.spot_size = math.radians(60)
     print("  + ScannerLight -> scanner_stab (Position = Pybullet-TCP, Blick +Z-Welt)")
 
 
-def add_gebissstand():
-    gebiss_path = os.path.join(OBJ_DIR, "Gebissstand_ohne_scheibe.obj")
-    if not os.path.exists(gebiss_path):
-        print("  - Gebissstand.obj nicht gefunden")
+def add_lower_jaw():
+    lower_jaw_stl = os.path.join(ROOT, "data", "meshes_jaws", "1", "lower.stl")
+    if not os.path.exists(lower_jaw_stl):
+        print(f"  - Unterkiefer fehlt: {lower_jaw_stl}")
         return
 
-    bpy.ops.wm.obj_import(filepath=gebiss_path)
-    obj = bpy.context.active_object
+    obj = _import_stl(lower_jaw_stl)
     if not obj or obj.type != "MESH":
-        print("  ! Gebissstand-Import fehlgeschlagen")
+        print("  ! Unterkiefer-Import fehlgeschlagen")
         return
 
-    obj.name = "Gebissstand"
-    obj.scale = (S, S, S)
+    obj.name = "gebiss_lower"
+    # STL liegt in mm vor -> 0.001*S (== 0.01 bei S=10)
+    obj.scale = (0.001 * S, 0.001 * S, 0.001 * S)
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.transform_apply(scale=True)
-    obj.location = Vector((0.8 * S, 0, 0.25*S))
-    obj.rotation_euler = (0, 0, -math.radians(90))
-    print(f"  + Gebissstand -> ({obj.location.x:.2f}, {obj.location.y:.2f}, {obj.location.z:.2f})")
+    obj.location = Vector((0.85 * S, 0, 0.3 * S))
+    obj.rotation_euler = (0, 0, math.radians(90))
+    print(f"  + gebiss_lower -> ({obj.location.x:.2f}, {obj.location.y:.2f}, {obj.location.z:.2f})")
+
+
+def setup_render():
+    scene = bpy.context.scene
+    scene.render.resolution_x = RENDER_W
+    scene.render.resolution_y = RENDER_H
+    print(f"  + Render-Aufloesung -> {RENDER_W}x{RENDER_H} (D455 16:9)")
 
 
 def main():
@@ -296,8 +330,11 @@ def main():
     print("Fuege Scanner und Kamera hinzu...")
     add_scanner_and_camera(arm_obj, meshes)
 
-    print("Fuege Gebissstand hinzu...")
-    add_gebissstand()
+    print("Fuege Unterkiefer hinzu...")
+    add_lower_jaw()
+
+    print("Render-Einstellungen...")
+    setup_render()
 
     bpy.context.scene.frame_set(1)
     print("\nFertig! UR5e riggt.")
