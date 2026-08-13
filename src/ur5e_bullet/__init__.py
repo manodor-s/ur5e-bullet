@@ -382,22 +382,28 @@ class UR5Sim():
             return target_pos, None, 0.0, actual_endpoint, None
         return last_good_position, None, end_deviation_mm, actual_endpoint, None
 
-    def _probe_linear_stepwise(self, ee_start, ee_target, start_tcp):
+    def _probe_linear_stepwise(self, target_pos, target_ori, start_tcp):
         num_steps = 100
         fk_tol = 0.0005
         seed_configuration = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
         last_good_conf = list(seed_configuration)
         last_good_fraction = 0.0
         failed = False
+        _, q_start_tcp = self.get_tcp_pose()
+        q_target_tcp = pybullet.getQuaternionFromEuler(target_ori)
 
         for i in range(1, num_steps + 1):
             fraction = i / num_steps
-            target_position_at_t = [
-                ee_start[0][j] + fraction * (ee_target[0][j] - ee_start[0][j])
+            target_tcp_at_t = [
+                start_tcp[j] + fraction * (target_pos[j] - start_tcp[j])
                 for j in range(3)
             ]
-            interpolated_orientation = pybullet.getQuaternionSlerp(ee_start[1], ee_target[1], fraction)
-            configuration = self._ik((target_position_at_t, interpolated_orientation), seed=seed_configuration)
+            interpolated_tcp_orientation = pybullet.getQuaternionSlerp(q_start_tcp, q_target_tcp, fraction)
+            ee_at_t = self._tcp_to_ee(
+                target_tcp_at_t,
+                list(pybullet.getEulerFromQuaternion(interpolated_tcp_orientation)),
+            )
+            configuration = self._ik(ee_at_t, seed=seed_configuration)
             if configuration is None:
                 self._last_collision_conf = last_good_conf
                 failed = True
@@ -410,7 +416,7 @@ class UR5Sim():
             for j, v in zip(self._joint_ids, configuration):
                 pybullet.resetJointState(self.ur5, j, v)
             ls = pybullet.getLinkState(self.ur5, self.end_effector_index, computeForwardKinematics=True)
-            fk_err = math.sqrt(sum((ls[0][j] - target_position_at_t[j])**2 for j in range(3)))
+            fk_err = math.sqrt(sum((ls[0][j] - ee_at_t[0][j])**2 for j in range(3)))
             for j, v in zip(self._joint_ids, saved):
                 pybullet.resetJointState(self.ur5, j, v)
             if fk_err > fk_tol:
@@ -422,14 +428,18 @@ class UR5Sim():
             last_good_fraction = fraction
 
         last_valid_position = [
-            ee_start[0][j] + last_good_fraction * (ee_target[0][j] - ee_start[0][j])
+            start_tcp[j] + last_good_fraction * (target_pos[j] - start_tcp[j])
             for j in range(3)
         ]
         if failed:
             last_valid_orientation = pybullet.getQuaternionSlerp(
-                ee_start[1], ee_target[1], last_good_fraction)
-            self._last_collision_tcp_pose = (last_valid_position, last_valid_orientation)
-            return last_valid_position, target_position_at_t, 0.0, last_valid_position, None
+                q_start_tcp, q_target_tcp, last_good_fraction)
+            last_valid_ee = self._tcp_to_ee(
+                last_valid_position,
+                list(pybullet.getEulerFromQuaternion(last_valid_orientation)),
+            )
+            self._last_collision_tcp_pose = (last_valid_ee[0], last_valid_ee[1])
+            return last_valid_position, target_tcp_at_t, 0.0, last_valid_position, None
         return last_valid_position, None, 0.0, last_valid_position, None
 
     def _probe_linear(self, target_pos, target_ori):
@@ -448,7 +458,7 @@ class UR5Sim():
             pybullet.configureDebugVisualizer(render_flag, 1)
             return result
 
-        result = self._probe_linear_stepwise(ee_start, ee_target, start_tcp)
+        result = self._probe_linear_stepwise(target_pos, target_ori, start_tcp)
         pybullet.configureDebugVisualizer(render_flag, 1)
         return result
 
