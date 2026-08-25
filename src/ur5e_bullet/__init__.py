@@ -187,8 +187,11 @@ def demo_simulation():
             tcp_items = draw_tcp()
             continue
         if cmd.action == "render":
+            sim._mirror._render_done.clear()
             sim._mirror.send_message({"render": True})
             print("  Render gestartet...")
+            sim._mirror._render_done.wait(timeout=300)
+            print()
             continue
 
         pybullet.removeAllUserDebugItems()

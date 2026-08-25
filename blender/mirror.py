@@ -15,6 +15,16 @@ CONTROL_JOINTS = [
 
 _conn = None
 _buffer = ""
+_render_tile_count = 0
+
+
+def send_to_host(data):
+    if _conn is None:
+        return
+    try:
+        _conn.sendall((json.dumps(data) + "\n").encode("utf-8"))
+    except OSError:
+        pass
 
 
 def build_scene():
@@ -101,9 +111,28 @@ def poll():
         if "tcp" in msg:
             _apply_tcp(msg["tcp"])
         if "render" in msg:
+            global _render_tile_count
+            _render_tile_count = 0
+
+            @bpy.app.handlers.persistent
+            def _on_render_write(scene, depsgraph=None):
+                global _render_tile_count
+                _render_tile_count += 1
+                send_to_host({"render_progress": _render_tile_count})
+
+            @bpy.app.handlers.persistent
+            def _on_render_complete(scene, depsgraph=None):
+                send_to_host({"render_complete": scene.render.filepath})
+                if _on_render_write in bpy.app.handlers.render_write:
+                    bpy.app.handlers.render_write.remove(_on_render_write)
+                if _on_render_complete in bpy.app.handlers.render_complete:
+                    bpy.app.handlers.render_complete.remove(_on_render_complete)
+
+            bpy.app.handlers.render_write.append(_on_render_write)
+            bpy.app.handlers.render_complete.append(_on_render_complete)
+
             def _do_render():
                 bpy.ops.render.render(write_still=True)
-                print(f"[mirror] Render gespeichert: {bpy.context.scene.render.filepath}")
                 return None
             bpy.context.scene.render.filepath = os.path.join(rig.ROOT, "render.png")
             bpy.app.timers.register(_do_render, first_interval=0)

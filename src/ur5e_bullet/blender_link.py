@@ -2,6 +2,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import threading
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -17,6 +18,7 @@ class BlenderMirror:
         self._connected = False
         self._conn = None
         self._lock = threading.Lock()
+        self._render_done = threading.Event()
 
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -61,18 +63,31 @@ class BlenderMirror:
                 return
             conn.settimeout(1.0)
             self._conn = conn
+            ready = False
             while self._alive:
                 try:
-                    data = conn.recv(1024)
+                    data = conn.recv(4096)
                 except socket.timeout:
                     continue
                 if not data:
                     break
                 buf += data
-                if b"READY" in buf:
-                    buf = b""
-                    self._connected = True
-                    self.send_current()
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if not ready:
+                        if b"READY" in line:
+                            ready = True
+                            self._connected = True
+                            self.send_current()
+                        continue
+                    try:
+                        msg = json.loads(line.decode("utf-8", "ignore"))
+                    except ValueError:
+                        continue
+                    self._handle_host_msg(msg)
         except OSError:
             pass
         finally:
@@ -82,6 +97,14 @@ class BlenderMirror:
                     conn.close()
                 except OSError:
                     pass
+
+    def _handle_host_msg(self, msg):
+        if "render_progress" in msg:
+            n = msg['render_progress']
+            print(f"\r  Rendering... [{n}]", end="", flush=True)
+        if "render_complete" in msg:
+            print(f"\n  Render gespeichert: {msg['render_complete']}")
+            self._render_done.set()
 
     def send_current(self):
         try:
