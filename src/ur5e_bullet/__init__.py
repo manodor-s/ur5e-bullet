@@ -55,6 +55,8 @@ def _parse_command(tokens):
         return Command("speed", {"speed": max(speed, 0.01)})
     if tokens[0] == "@":
         return Command("reset", {})
+    if tokens[0] == "render":
+        return Command("render", {})
 
     linear = True
     idx = 0
@@ -146,6 +148,7 @@ def demo_simulation():
     print("  RRT-Modus:   'r x y z rx ry rz'")
     print("  Geschw.:     's 0.5' (global, Default 0.5)")
     print("  Reset:       '@'  (nach manuellem Ziehen)")
+    print("  Render:      'render' (Cycles-Render in Blender)")
     print("────────────────────────────────────────────")
     items = []
     current_speed = 0.5
@@ -182,6 +185,10 @@ def demo_simulation():
             items.clear()
             tcp_items = []
             tcp_items = draw_tcp()
+            continue
+        if cmd.action == "render":
+            sim._mirror.send_message({"render": True})
+            print("  Render gestartet...")
             continue
 
         pybullet.removeAllUserDebugItems()

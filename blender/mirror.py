@@ -100,6 +100,13 @@ def poll():
             _apply_joints(msg["joints"])
         if "tcp" in msg:
             _apply_tcp(msg["tcp"])
+        if "render" in msg:
+            def _do_render():
+                bpy.ops.render.render(write_still=True)
+                print(f"[mirror] Render gespeichert: {bpy.context.scene.render.filepath}")
+                return None
+            bpy.context.scene.render.filepath = os.path.join(rig.ROOT, "render.png")
+            bpy.app.timers.register(_do_render, first_interval=0)
     return 0.05
 
 
