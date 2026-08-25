@@ -43,8 +43,8 @@ CAMERA_NEAR_M = 0.001
 CAMERA_FAR_M = 0.1
 CAMERA_DISPLAY_M = 0.2
 # D455 nativer Aspect 16:9 (1280x720), Render in 8K
-RENDER_W = 7680
-RENDER_H = 4320
+RENDER_W = 3840
+RENDER_H = 2160
 
 MESH_ROTATIONS = {
     "base_link": (math.radians(90), 0, 0),
@@ -225,29 +225,29 @@ def add_scanner_and_camera(arm_obj, meshes):
         print("  - scanner-stab.stl nicht gefunden")
         return
 
-    obj = _import_stl(scanner_path)
-    if not obj or obj.type != "MESH":
+    scanner_obj = _import_stl(scanner_path)
+    if not scanner_obj or scanner_obj.type != "MESH":
         print("  ! Scanner-Import fehlgeschlagen")
         return
 
-    obj.name = "scanner_stab"
-    obj.scale = (S, S, S)
+    scanner_obj.name = "scanner_stab"
+    scanner_obj.scale = (S, S, S)
     bpy.ops.object.select_all(action="DESELECT")
-    obj.select_set(True)
-    bpy.context.view_layer.objects.active = obj
+    scanner_obj.select_set(True)
+    bpy.context.view_layer.objects.active = scanner_obj
     bpy.ops.object.transform_apply(scale=True)
 
-    obj.parent = arm_obj
-    obj.parent_type = "BONE"
-    obj.parent_bone = "wrist_3_joint"
-    obj.matrix_parent_inverse = Matrix.Identity(4)
+    scanner_obj.parent = arm_obj
+    scanner_obj.parent_type = "BONE"
+    scanner_obj.parent_bone = "wrist_3_joint"
+    scanner_obj.matrix_parent_inverse = Matrix.Identity(4)
     # Bone-lokale Transform des scanner_link-Frames (verifiziert gegen pybullet),
     # inkl. Blender-Bone-Binding am Tail (bone length 0.05 m -> 0.05*S BU Y-Offset):
     # loc (0.002*S, 0.05*S, 0) BU, Rotation -> Quaternion (w,x,y,z)=(0,0,0.7071,0.7071)
-    obj.location = Vector((0.002 * S, 0.05 * S, 0.0))
-    obj.rotation_mode = "QUATERNION"
-    obj.rotation_quaternion = (0.0, 0.0, 0.7071, 0.7071)
-    meshes["scanner_stab"] = obj
+    scanner_obj.location = Vector((0.002 * S, 0.05 * S, 0.0))
+    scanner_obj.rotation_mode = "QUATERNION"
+    scanner_obj.rotation_quaternion = (0.0, 0.0, 0.7071, 0.7071)
+    meshes["scanner_stab"] = scanner_obj
     print("  + scanner_stab -> wrist_3_joint")
 
     bpy.ops.object.camera_add()
@@ -260,7 +260,7 @@ def add_scanner_and_camera(arm_obj, meshes):
     cam.data.clip_start = CAMERA_NEAR_M * S
     cam.data.clip_end = CAMERA_FAR_M * S
     cam.data.display_size = CAMERA_DISPLAY_M * S
-    cam.parent = obj
+    cam.parent = scanner_obj
     cam.matrix_parent_inverse = Matrix.Identity(4)
     cam.location = Vector((0.008 * S, 0, 0.213 * S))
     cam.rotation_mode = "QUATERNION"
@@ -271,7 +271,7 @@ def add_scanner_and_camera(arm_obj, meshes):
     bpy.ops.object.light_add(type="SPOT")
     light = bpy.context.active_object
     light.name = "ScannerLight"
-    light.parent = obj
+    light.parent = scanner_obj
     light.matrix_parent_inverse = Matrix.Identity(4)
     light.location = Vector((0.008 * S, 0, 0.213 * S))
     light.rotation_euler = (0, math.radians(-90), 0)
