@@ -1,6 +1,7 @@
 import bpy
 import math
 import os
+import sys
 import json
 from mathutils import Vector, Euler, Matrix, Quaternion
 
@@ -28,27 +29,23 @@ def _script_dir():
 SCRIPT_DIR = _script_dir()
 
 ROOT = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, ROOT)
+from config import (
+    GEBISS_POSITION, GEBISS_EULER, GEBISS_SCALE,
+    GEBISS_ROUGHNESS, GEBISS_SPECULAR,
+    CAMERA_ROLL_DEG, CAMERA_SENSOR_W_MM, CAMERA_SENSOR_H_MM,
+    CAMERA_FOV_DEG, CAMERA_LENS_MM, CAMERA_NEAR_M, CAMERA_FAR_M, CAMERA_DISPLAY_M,
+    LIGHT_POWER, LIGHT_OFFSET,
+    RENDER_W, RENDER_H, RENDER_ENGINE, RENDER_DEVICE, RENDER_TRANSPARENT,
+    TOOL_OFFSET_POS, S,
+)
+
+CAMERA_ROLL = math.radians(CAMERA_ROLL_DEG)
+CAMERA_SENSOR_W = CAMERA_SENSOR_W_MM
+CAMERA_SENSOR_H = CAMERA_SENSOR_H_MM
+CAMERA_FOV = math.radians(CAMERA_FOV_DEG)
 POSE_JSON = os.path.join(ROOT, "data", "urdf_data.json")
 OBJ_DIR = os.path.join(ROOT, "data", "meshes")
-S = 1
-
-CAMERA_ROLL = math.radians(-90)
-CAMERA_SENSOR_W = 36.0
-# RealSense D455: nativer 16:9-Sensor (1280x720) -> H = W * 9/16
-CAMERA_SENSOR_H = CAMERA_SENSOR_W * 9 / 16
-# RealSense D455 (breiteste FOV): 87° H x 58° V
-CAMERA_FOV = math.radians(87)
-CAMERA_LENS_MM = CAMERA_SENSOR_W / (2 * math.tan(CAMERA_FOV / 2))
-CAMERA_NEAR_M = 0.001
-CAMERA_FAR_M = 1
-CAMERA_DISPLAY_M = 0.2
-# D455 nativer Aspect 16:9 (1280x720), Render in 8K
-RENDER_W = 1920
-RENDER_H = 1080
-LIGHT_POWER=0.0005
-RENDER_ENGINE = "CYCLES"
-RENDER_DEVICE = "GPU"
-RENDER_TRANSPARENT = False
 
 MESH_ROTATIONS = {
     "base_link": (math.radians(90), 0, 0),
@@ -266,7 +263,7 @@ def add_scanner_and_camera(arm_obj, meshes):
     cam.data.display_size = CAMERA_DISPLAY_M * S
     cam.parent = scanner_obj
     cam.matrix_parent_inverse = Matrix.Identity(4)
-    cam.location = Vector((0.008 * S, 0, 0.213 * S))
+    cam.location = Vector((TOOL_OFFSET_POS[0] * S, TOOL_OFFSET_POS[1] * S, TOOL_OFFSET_POS[2] * S))
     cam.rotation_mode = "QUATERNION"
     base_q = Euler((0, math.radians(-90), 0), "XYZ").to_quaternion()
     cam.rotation_quaternion = base_q @ Quaternion((0, 0, 1), CAMERA_ROLL)
@@ -279,7 +276,7 @@ def add_scanner_and_camera(arm_obj, meshes):
     light.parent = scanner_obj
     light.matrix_parent_inverse = Matrix.Identity(4)
     # Licht leicht von der Kamera versetzt (LED-Ring, nicht exakt co-located)
-    light.location = Vector((0.008 * S, 0.025 * S, 0.213 * S))
+    light.location = Vector((LIGHT_OFFSET[0] * S, LIGHT_OFFSET[1] * S, LIGHT_OFFSET[2] * S))
     light.data.energy = LIGHT_POWER
     print("  + ScannerLight -> scanner_stab (Position = Pybullet-TCP, Blick +Z-Welt)")
 
@@ -300,19 +297,19 @@ def replace_jaw(folder=1, jaw_type="lower"):
         print(f"  - Jaw fehlt: {stl_path}")
         return False
 
-    obj = _import_stl(stl_path)
-    if not obj or obj.type != "MESH":
+    jaw = _import_stl(stl_path)
+    if not jaw or jaw.type != "MESH":
         print(f"  ! Jaw-Import fehlgeschlagen: {stl_path}")
         return False
 
-    obj.name = f"gebiss_{jaw_type}"
-    obj.scale = (0.001 * S, 0.001 * S, 0.001 * S)
+    jaw.name = f"gebiss_{jaw_type}"
+    jaw.scale = (GEBISS_SCALE[0] * S, GEBISS_SCALE[1] * S, GEBISS_SCALE[2] * S)
     bpy.ops.object.select_all(action="DESELECT")
-    obj.select_set(True)
-    bpy.context.view_layer.objects.active = obj
+    jaw.select_set(True)
+    bpy.context.view_layer.objects.active = jaw
     bpy.ops.object.transform_apply(scale=True)
-    obj.location = Vector((0.85 * S, 0, 0.3 * S))
-    obj.rotation_euler = (0, 0, math.radians(90))
+    jaw.location = Vector((GEBISS_POSITION[0] * S, GEBISS_POSITION[1] * S, GEBISS_POSITION[2] * S))
+    jaw.rotation_euler = (GEBISS_EULER[0], GEBISS_EULER[1], GEBISS_EULER[2])
 
     mat = bpy.data.materials.get("GebissMaterial")
     if mat is None:
@@ -320,14 +317,14 @@ def replace_jaw(folder=1, jaw_type="lower"):
         mat.use_nodes = True
         bsdf = mat.node_tree.nodes.get("Principled BSDF")
         if bsdf:
-            bsdf.inputs["Roughness"].default_value = 0.8
-            bsdf.inputs["Specular IOR Level"].default_value = 0.2
-    if obj.data.materials:
-        obj.data.materials[0] = mat
+            bsdf.inputs["Roughness"].default_value = GEBISS_ROUGHNESS
+            bsdf.inputs["Specular IOR Level"].default_value = GEBISS_SPECULAR
+    if jaw.data.materials:
+        jaw.data.materials[0] = mat
     else:
-        obj.data.materials.append(mat)
+        jaw.data.materials.append(mat)
 
-    print(f"  + {obj.name} -> ({obj.location.x:.2f}, {obj.location.y:.2f}, {obj.location.z:.2f})")
+    print(f"  + {jaw.name} -> ({jaw.location.x:.2f}, {jaw.location.y:.2f}, {jaw.location.z:.2f})")
     return True
 
 

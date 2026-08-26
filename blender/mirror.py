@@ -7,6 +7,8 @@ import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rig
+sys.path.insert(0, rig.ROOT)
+from config import SOCKET_BUFFER, SOCKET_POLL_INTERVAL
 
 CONTROL_JOINTS = [
     "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
@@ -89,9 +91,9 @@ def _apply_tcp(tcp):
 def poll():
     global _buffer
     try:
-        data = _conn.recv(4096)
+        data = _conn.recv(SOCKET_BUFFER)
     except BlockingIOError:
-        return 0.05
+        return SOCKET_POLL_INTERVAL
     if not data:
         print("[mirror] Verbindung zu Pybullet geschlossen – Mirror stoppt")
         _conn.close()
@@ -161,7 +163,7 @@ def main():
         return
     build_scene()
     if connect(port):
-        bpy.app.timers.register(poll, first_interval=0.05)
+        bpy.app.timers.register(poll, first_interval=SOCKET_POLL_INTERVAL)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import random
 import time
 import numpy as np
 import pybullet
-import pybullet_data
+
 from collections import namedtuple
 
 from pybullet_planning import plan_joint_motion
@@ -17,13 +17,26 @@ from .blender_link import BlenderMirror
 from .decimate_stl import read_stl, decimate, write_stl
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
-_JAWS_DIR = os.path.join(_PKG_DIR, "..", "..", "data", "meshes_jaws")
+_PROJECT_ROOT = os.path.join(_PKG_DIR, "..", "..")
+_JAWS_DIR = os.path.join(_PROJECT_ROOT, "data", "meshes_jaws")
 ROBOT_URDF_PATH = os.path.join(_PKG_DIR, "ur_e_description", "urdf", "ur5e.urdf")
-TABLE_URDF_PATH = os.path.join(pybullet_data.getDataPath(), "table/table.urdf")
-GEBISS_SCALE = [0.001, 0.001, 0.001]
-GEBISS_POSITION = [0.85, 0, 0.3]
-GEBISS_EULER = [0, 0, math.pi / 2]
-GEBISS_COLL_CELL = 1.5
+
+import importlib.util as _ilu
+_cfg = _ilu.spec_from_file_location("config", os.path.join(_PROJECT_ROOT, "config.py"))
+_cfg_mod = _ilu.module_from_spec(_cfg)
+_cfg.loader.exec_module(_cfg_mod)
+GEBISS_SCALE = _cfg_mod.GEBISS_SCALE
+GEBISS_POSITION = _cfg_mod.GEBISS_POSITION
+GEBISS_EULER = _cfg_mod.GEBISS_EULER
+GEBISS_COLL_CELL = _cfg_mod.GEBISS_COLL_CELL
+TOOL_OFFSET_POS = _cfg_mod.TOOL_OFFSET_POS
+TOOL_OFFSET_ORN = _cfg_mod.TOOL_OFFSET_ORN
+IK_LAMBDA = _cfg_mod.IK_LAMBDA
+IK_TOLERANCE = _cfg_mod.IK_TOLERANCE
+RRT_RESTARTS = _cfg_mod.RRT_RESTARTS
+RRT_SMOOTH = _cfg_mod.RRT_SMOOTH
+RRT_SEED = _cfg_mod.RRT_SEED
+GHOST_COLOR = _cfg_mod.GHOST_COLOR
 
 
 def _compute_orientation(look_dir):
@@ -78,6 +91,21 @@ def _classify_normal(normal):
     return "seitlich"
 
 
+def _interp_points(pts, n):
+    if len(pts) < 2 or n < 2:
+        return list(pts)
+    result = []
+    total = len(pts) - 1
+    for i in range(n):
+        t = i / (n - 1) * total
+        idx = min(int(t), total - 1)
+        frac = t - idx
+        p0 = np.array(pts[idx])
+        p1 = np.array(pts[idx + 1])
+        result.append(list(p0 + frac * (p1 - p0)))
+    return result
+
+
 class UR5Sim():
 
     def __init__(self, gui=True, mirror=None):
@@ -120,11 +148,11 @@ class UR5Sim():
             [2*math.pi]*6,
             [0, -math.pi/2, math.pi/2, -math.pi/2, -math.pi/2, 0],
         )
-        self._ik_lambda = 0.05
+        self._ik_lambda = IK_LAMBDA
         self._collision_link_pairs = get_self_link_pairs(self.ur5, get_movable_joints(self.ur5))
 
-        self.tool_offset_pos = [0.213, 0, -0.006]
-        self.tool_offset_orn = [0, 0, 0, 1]
+        self.tool_offset_pos = list(TOOL_OFFSET_POS)
+        self.tool_offset_orn = list(TOOL_OFFSET_ORN)
         self._last_conf = None
         self._last_target = None
         self._last_collision_tcp_pose = None
@@ -139,9 +167,6 @@ class UR5Sim():
         _color_links(self)
 
     def load_robot(self):
-        self._table = pybullet.loadURDF(
-            TABLE_URDF_PATH, [0.5, 0, -0.6300], [0, 0, 0, 1],
-        )
         self._current_jaw_folder = 1
         self._current_jaw_type = "lower"
         vis_path, col_path = self._resolve_jaw_paths(1, "lower")
@@ -220,36 +245,82 @@ class UR5Sim():
                 return True
         return False
 
-    def compute_scan_positions(self, distance=0.08, max_positions=20):
+    def _load_jaw_verts(self):
         vis_path, _ = self._resolve_jaw_paths(self._current_jaw_folder, self._current_jaw_type)
         verts, tris = read_stl(vis_path)
         R_body = np.array(pybullet.getMatrixFromQuaternion(
             pybullet.getQuaternionFromEuler(GEBISS_EULER)
         )).reshape(3, 3)
         verts = (R_body @ (verts * np.array(GEBISS_SCALE)).T).T + np.array(GEBISS_POSITION)
-        n_tris = len(tris)
-        if n_tris == 0:
+        return verts, tris
+
+    def _compute_arch_centerline(self, verts, n_points=20):
+        y_vals = verts[:, 1]
+        y_min, y_max = y_vals.min(), y_vals.max()
+        if y_max - y_min < 1e-6:
             return []
-        step = max(1, n_tris // max_positions)
+        slice_hw = (y_max - y_min) / n_points * 1.5
+        raw = []
+        for i in range(n_points):
+            y = y_min + (y_max - y_min) * i / (n_points - 1)
+            mask = np.abs(y_vals - y) < slice_hw
+            if mask.sum() < 3:
+                continue
+            xv = verts[mask, 0]
+            zv = verts[mask, 2]
+            raw.append((float(np.mean(xv)), float(y), float(np.mean(zv))))
+        if len(raw) < 2:
+            return raw
+        raw.sort(key=lambda p: p[1])
+        return _interp_points(raw, n_points)
+
+    def compute_scan_path(self, path_type="outer", distance=0.08, n_points=20):
+        verts, tris = self._load_jaw_verts()
+        centerline = self._compute_arch_centerline(verts, n_points)
+        if len(centerline) < 2:
+            return []
+        center = np.mean(centerline, axis=0)
+        outward_normals = []
+        for p in centerline:
+            d = np.array(p[:2]) - np.array(center[:2])
+            n = np.linalg.norm(d)
+            outward_normals.append(d / n if n > 1e-6 else np.array([1.0, 0.0]))
         current_joints = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
         results = []
-        for idx in range(0, n_tris, step):
-            i0, i1, i2 = tris[idx]
-            v0, v1, v2 = verts[i0], verts[i1], verts[i2]
-            centroid = (v0 + v1 + v2) / 3.0
-            edge1 = v1 - v0
-            edge2 = v2 - v0
-            normal = np.cross(edge1, edge2)
-            norm_val = np.linalg.norm(normal)
-            if norm_val < 1e-10:
+        for i, (cp, out2d) in enumerate(zip(centerline, outward_normals)):
+            out3 = np.array([out2d[0], out2d[1], 0.0])
+            if path_type == "outer":
+                tcp_pos = np.array(cp) + out3 * distance
+                look = -out3
+            elif path_type == "inner":
+                tcp_pos = np.array(cp) - out3 * distance
+                look = out3
+            elif path_type == "top":
+                tcp_pos = np.array(cp) + np.array([0, 0, distance])
+                look = np.array([0, 0, -1.0])
+            else:
                 continue
-            normal = normal / norm_val
-            tcp_pos = centroid + normal * distance
-            tcp_ori = _compute_orientation(-normal)
-            classification = _classify_normal(normal)
-            ok = self._conf_for(self._tcp_to_ee(list(tcp_pos), list(tcp_ori)), seed=current_joints) is not None
-            results.append((list(tcp_pos), list(tcp_ori), ok, classification))
+            tcp_ori = _compute_orientation(look)
+            ok = self._conf_for(
+                self._tcp_to_ee(list(tcp_pos), list(tcp_ori)), seed=current_joints
+            ) is not None
+            results.append((list(tcp_pos), list(tcp_ori), ok))
         return results
+
+    def _draw_scan_path(self, path, items):
+        for i, (pos, ori, ok) in enumerate(path):
+            color = [0, 0.8, 0] if ok else [1, 0, 0]
+            h = 0.005
+            items.append(pybullet.addUserDebugLine(
+                [pos[0]-h, pos[1], pos[2]], [pos[0]+h, pos[1], pos[2]], color, 2))
+            items.append(pybullet.addUserDebugLine(
+                [pos[0], pos[1]-h, pos[2]], [pos[0], pos[1]+h, pos[2]], color, 2))
+            items.append(pybullet.addUserDebugLine(
+                [pos[0], pos[1], pos[2]-h], [pos[0], pos[1], pos[2]+h], color, 2))
+            if i < len(path) - 1:
+                npos = path[i + 1][0]
+                items.append(pybullet.addUserDebugLine(pos, npos, [0, 0.6, 0], 1))
+        return items
 
     def set_joint_angles(self, joint_angles):
         pybullet.setJointMotorControlArray(
@@ -477,12 +548,12 @@ class UR5Sim():
         devnull_fd = os.open(os.devnull, os.O_WRONLY)
         saved_stderr_fd = os.dup(2)
         os.dup2(devnull_fd, 2)
-        random.seed(0)
-        np.random.seed(0)
+        random.seed(RRT_SEED)
+        np.random.seed(RRT_SEED)
         path = plan_joint_motion(
             self.ur5, self._joint_ids, target_configuration,
             obstacles=self._obstacles(), self_collisions=True,
-            restarts=30, smooth=30,
+            restarts=RRT_RESTARTS, smooth=RRT_SMOOTH,
         )
         os.dup2(saved_stderr_fd, 2)
         os.close(devnull_fd)
@@ -647,11 +718,6 @@ class UR5Sim():
             if pybullet.getClosestPoints(self.ur5, self.ur5, 0.0, linkIndexA=i, linkIndexB=j):
                 cf = False
                 break
-        if cf and hasattr(self, '_table'):
-            cf = not any(
-                pybullet.getClosestPoints(self.ur5, self._table, 0.0, linkIndexA=i)
-                for i in range(-1, self.num_joints)
-            )
         if cf and hasattr(self, '_gebiss'):
             cf = not any(
                 pybullet.getClosestPoints(self.ur5, self._gebiss, 0.0, linkIndexA=i)
@@ -663,8 +729,6 @@ class UR5Sim():
 
     def _obstacles(self):
         obs = []
-        if hasattr(self, '_table'):
-            obs.append(self._table)
         if hasattr(self, '_gebiss'):
             obs.append(self._gebiss)
         return obs
@@ -696,7 +760,7 @@ class UR5Sim():
         os.close(devnull_fd)
         for i in range(-1, pybullet.getNumJoints(ghost)):
             pybullet.changeDynamics(ghost, i, mass=0)
-            pybullet.changeVisualShape(ghost, i, rgbaColor=[0.2, 0.8, 1.0, 0.4])
+            pybullet.changeVisualShape(ghost, i, rgbaColor=GHOST_COLOR)
         for i, v in zip(self._joint_ids, conf):
             pybullet.resetJointState(ghost, i, v)
         pybullet.resetBasePositionAndOrientation(ghost, [0, 0, 0], [0, 0, 0, 1])
@@ -805,12 +869,12 @@ class UR5Sim():
             pybullet.configureDebugVisualizer(render_flag, 1)
             print(f"[nein] Ziel {tcp_pos} kollidiert")
             return False
-        random.seed(0)
-        np.random.seed(0)
+        random.seed(RRT_SEED)
+        np.random.seed(RRT_SEED)
         path = plan_joint_motion(
             self.ur5, self._joint_ids, target_configuration,
             obstacles=obstacles, self_collisions=True,
-            restarts=30, smooth=30,
+            restarts=RRT_RESTARTS, smooth=RRT_SMOOTH,
         )
         if path is None:
             pybullet.configureDebugVisualizer(render_flag, 1)

@@ -6,7 +6,6 @@ from collections import namedtuple
 from .sim import (
     UR5Sim,
     ROBOT_URDF_PATH,
-    TABLE_URDF_PATH,
     GEBISS_SCALE,
     _JAWS_DIR,
 )
@@ -72,23 +71,31 @@ def _parse_command(tokens):
         return Command("jaw", {"folder": folder, "type": jaw_type})
     if tokens[0] == "scan":
         if len(tokens) == 1:
-            return Command("scan", {"distance": 0.08, "max_positions": 20})
-        if len(tokens) == 2:
+            return Command("error", {})
+        path_type = tokens[1]
+        if path_type not in ("outer", "top", "inner"):
             try:
-                if "." in tokens[1]:
-                    return Command("scan", {"distance": float(tokens[1]), "max_positions": 20})
-                else:
-                    return Command("scan_goto", {"index": int(tokens[1])})
+                path_type_int = int(tokens[1])
+                return Command("scan_goto", {"index": path_type_int})
             except ValueError:
-                print(f"  ? '{tokens[1]}' verstanden?")
+                print(f"  ? '{tokens[1]}' – 'outer', 'top' oder 'inner'")
                 return Command("error", {})
+        distance = 0.08
         if len(tokens) >= 3:
             try:
-                return Command("scan", {"distance": float(tokens[1]), "max_positions": int(tokens[2])})
+                distance = float(tokens[2])
             except ValueError:
-                print(f"  ? '{tokens[1]} {tokens[2]}' verstanden?")
+                pass
+        return Command("scan_path", {"type": path_type, "distance": distance})
+    if tokens[0] == "+":
+        n = 1
+        if len(tokens) >= 2:
+            try:
+                n = int(tokens[1])
+            except ValueError:
+                print(f"  ? '{tokens[1]}' ist keine Zahl")
                 return Command("error", {})
-        return Command("error", {})
+        return Command("scan_next", {"steps": n})
 
     linear = True
     idx = 0
@@ -182,10 +189,12 @@ def demo_simulation():
     print("  Reset:       '@'  (nach manuellem Ziehen)")
     print("  Render:      'render' (Cycles-Render in Blender)")
     print("  Gebiss:      'jaw <nr> [upper|lower]' (z. B. jaw 3 upper)")
-    print("  Scan:        'scan' oder 'scan <abstand>' (Scan-Positionen berechnen)")
+    print("  Scan-Bahn:   'scan outer|top|inner' + '<nr>' oder '+' zum Weiterfahren")
     print("────────────────────────────────────────────")
     items = []
-    scan_cache = {}
+    current_path = []
+    current_path_idx = 0
+    current_path_name = None
     current_speed = 0.5
     tcp_items = draw_tcp()
 
@@ -244,34 +253,72 @@ def demo_simulation():
                 sim._mirror._jaw_done.wait(timeout=10)
             tcp_items = draw_tcp()
             continue
-        if cmd.action == "scan":
+        if cmd.action == "scan_path":
+            path_type = cmd.params["type"]
             dist = cmd.params["distance"]
-            maxp = cmd.params["max_positions"]
-            positions = sim.compute_scan_positions(distance=dist, max_positions=maxp)
-            scan_cache.clear()
-            for i, (pos, ori, ok, cls) in enumerate(positions):
-                scan_cache[i] = (pos, ori)
-                status = "✓" if ok else "✗"
-                deg = [math.degrees(a) for a in ori]
-                print(f"  #{i+1:2d}  {cls:9s}  ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})  rx={deg[0]:.0f} ry={deg[1]:.0f} rz={deg[2]:.0f}  {status}")
-            reachable = sum(1 for _, _, ok, _ in positions if ok)
-            print(f"  → {reachable} von {len(positions)} erreichbar")
-            continue
-        if cmd.action == "scan_goto":
-            idx = cmd.params["index"]
-            if idx not in scan_cache:
-                print(f"  ? Position #{idx} nicht gefunden (scan zuerst ausfuehren)")
-                continue
-            pos, ori = scan_cache[idx]
-            print(f"  → fahre zu Position #{idx}...")
+            path = sim.compute_scan_path(path_type=path_type, distance=dist)
+            current_path.clear()
+            current_path.extend(path)
+            current_path_idx = 0
+            current_path_name = path_type
             pybullet.removeAllUserDebugItems()
             items.clear()
             tcp_items = []
-            ok = sim.move_to(pos, ori, linear=True, speed=current_speed)
+            sim._draw_scan_path(path, items)
+            reachable = sum(1 for _, _, ok in path if ok)
+            for i, (pos, ori, ok) in enumerate(path):
+                status = "✓" if ok else "✗"
+                deg = [math.degrees(a) for a in ori]
+                print(f"  #{i+1:2d}  ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})  rx={deg[0]:.0f} ry={deg[1]:.0f} rz={deg[2]:.0f}  {status}")
+            print(f"  → {path_type}: {reachable} von {len(path)} erreichbar")
+            continue
+        if cmd.action == "scan_goto":
+            idx = cmd.params["index"]
+            if not current_path:
+                print(f"  ? Kein Pfad geladen (zuerst 'scan outer/top/inner')")
+                continue
+            if idx < 1 or idx > len(current_path):
+                print(f"  ? #{idx} – Pfad hat {len(current_path)} Punkte")
+                continue
+            pos, ori, ok = current_path[idx - 1]
             if not ok:
-                ok = sim.move_to(pos, ori, linear=False, speed=current_speed)
-            if not ok:
-                print(f"  ⛔ Position #{idx} nicht erreichbar")
+                print(f"  ⛔ #{idx} nicht erreichbar")
+                continue
+            print(f"  → fahre zu {current_path_name} #{idx}...")
+            pybullet.removeAllUserDebugItems()
+            items.clear()
+            tcp_items = []
+            moved = sim.move_to(pos, ori, linear=True, speed=current_speed)
+            if not moved:
+                moved = sim.move_to(pos, ori, linear=False, speed=current_speed)
+            if not moved:
+                print(f"  ⛔ {current_path_name} #{idx} nicht erreichbar")
+            tcp_items = draw_tcp()
+            continue
+        if cmd.action == "scan_next":
+            steps = cmd.params["steps"]
+            if not current_path:
+                print(f"  ? Kein Pfad geladen (zuerst 'scan outer/top/inner')")
+                continue
+            for s in range(steps):
+                if current_path_idx >= len(current_path):
+                    print(f"  → Pfad-Ende erreicht ({len(current_path)} Punkte)")
+                    break
+                pos, ori, ok = current_path[current_path_idx]
+                if not ok:
+                    print(f"  → #{current_path_idx+1} übersprungen (nicht erreichbar)")
+                    current_path_idx += 1
+                    continue
+                print(f"  → {current_path_name} #{current_path_idx+1}/{len(current_path)}...")
+                pybullet.removeAllUserDebugItems()
+                items.clear()
+                tcp_items = []
+                moved = sim.move_to(pos, ori, linear=True, speed=current_speed)
+                if not moved:
+                    moved = sim.move_to(pos, ori, linear=False, speed=current_speed)
+                if not moved:
+                    print(f"  ⛔ {current_path_name} #{current_path_idx+1} nicht erreichbar")
+                current_path_idx += 1
             tcp_items = draw_tcp()
             continue
 
