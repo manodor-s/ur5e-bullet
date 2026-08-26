@@ -239,6 +239,29 @@ class UR5Sim():
         self._current_jaw_type = jaw_type
         return True
 
+    def unload_jaw(self):
+        pybullet.setRealTimeSimulation(0)
+        if self._gebiss is not None:
+            pybullet.removeBody(self._gebiss)
+            self._gebiss = None
+
+    def load_jaw_at(self, folder, jaw_type, position, euler):
+        vis_path, col_path = self._resolve_jaw_paths(folder, jaw_type)
+        gebiss_vis = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=vis_path, meshScale=GEBISS_SCALE)
+        gebiss_col = pybullet.createCollisionShape(
+            pybullet.GEOM_MESH, fileName=col_path, meshScale=GEBISS_SCALE,
+            flags=pybullet.GEOM_FORCE_CONCAVE_TRIMESH,
+        )
+        self._gebiss = pybullet.createMultiBody(
+            baseVisualShapeIndex=gebiss_vis,
+            baseCollisionShapeIndex=gebiss_col,
+            basePosition=position,
+            baseOrientation=pybullet.getQuaternionFromEuler(euler),
+        )
+        self._current_jaw_folder = folder
+        self._current_jaw_type = jaw_type
+        pybullet.setRealTimeSimulation(1)
+
     def _check_jaw_collision(self):
         for i in range(-1, self.num_joints):
             if pybullet.getClosestPoints(self._gebiss, self.ur5, 0.0, linkIndexB=i):
@@ -818,12 +841,14 @@ class UR5Sim():
         def run(path, label=""):
             pybullet.configureDebugVisualizer(render_flag, 1)
             self._execute(path, speed)
-            actual_tcp, _ = self.get_tcp_pose()
+            actual_tcp, actual_quat = self.get_tcp_pose()
+            actual_ori = pybullet.getEulerFromQuaternion(actual_quat)
+            deg = [math.degrees(a) for a in actual_ori]
             error_mm = math.sqrt(sum((actual_tcp[i]-tcp_pos[i])**2 for i in range(3)))
             if error_mm > 0.005:
-                print(f"[!] {tcp_pos} → {error_mm*1000:.0f} mm daneben")
+                print(f"[!] ({actual_tcp[0]:.3f}, {actual_tcp[1]:.3f}, {actual_tcp[2]:.3f})  rx={deg[0]:.0f} ry={deg[1]:.0f} rz={deg[2]:.0f}  ({error_mm*1000:.0f} mm daneben){label}")
             else:
-                print(f"[ok] {tcp_pos}  ({error_mm*1000:.0f} mm){label}")
+                print(f"[ok] ({actual_tcp[0]:.3f}, {actual_tcp[1]:.3f}, {actual_tcp[2]:.3f})  rx={deg[0]:.0f} ry={deg[1]:.0f} rz={deg[2]:.0f}  ({error_mm*1000:.0f} mm){label}")
             self._save_last(tcp_pos, tcp_ori)
             return True
 

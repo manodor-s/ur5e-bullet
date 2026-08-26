@@ -7,7 +7,7 @@ JAWS_DIR = os.path.join(PKG_DIR, "data", "meshes_jaws")
 ROBOT_URDF_PATH = os.path.join(PKG_DIR, "src", "ur5e_bullet", "ur_e_description", "urdf", "ur5e.urdf")
 
 # ── Gebiss ──
-GEBISS_POSITION = [0.6, 0, 0.3]
+GEBISS_POSITION = [0.85, 0, 0.3]
 GEBISS_EULER = [0, 0, math.pi / 2]
 GEBISS_SCALE = [0.001, 0.001, 0.001]
 GEBISS_COLL_CELL = 1.5
@@ -57,3 +57,37 @@ S = 1
 IK_LAMBDA = 0.05
 IK_TOLERANCE = 0.08
 GHOST_COLOR = [0.2, 0.8, 1.0, 0.4]
+
+# ── Scan-Konfiguration ──
+START_POSITIONS = {
+    "Aussen": {
+        "tcp_pos":  [0.92, -0.05, 0.29],
+        "tcp_ori":  [0.0, 0.0, math.pi / 2],
+        "jaw_pos":  [0.85, 0, 0.3],
+        "jaw_euler": [0, 0, math.pi / 2],
+        "jaw_folder": 1,
+        "jaw_type":  "lower",
+        "waypoints": [
+            {"tcp_pos": [0.90, -0.03, 0.29], "tcp_ori": [0.0, 0.0, math.pi / 2], "label": "1"},
+            {"tcp_pos": [0.88, -0.01, 0.29], "tcp_ori": [0.0, 0.0, math.pi / 2], "label": "2"},
+        ],
+    },
+    "Oben": {
+        "tcp_pos":  [0.85, 0.0, 0.38],
+        "tcp_ori":  [0.0, math.pi, math.pi / 2],
+        "jaw_pos":  [0.85, 0, 0.3],
+        "jaw_euler": [0, 0, math.pi / 2],
+        "jaw_folder": 1,
+        "jaw_type":  "lower",
+        "waypoints": [],
+    },
+    "Innen": {
+        "tcp_pos":  [0.78, -0.05, 0.29],
+        "tcp_ori":  [0.0, 0.0, -math.pi / 2],
+        "jaw_pos":  [0.85, 0, 0.3],
+        "jaw_euler": [0, 0, math.pi / 2],
+        "jaw_folder": 1,
+        "jaw_type":  "lower",
+        "waypoints": [],
+    },
+}

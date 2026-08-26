@@ -10,6 +10,14 @@ from .sim import (
     _JAWS_DIR,
 )
 
+import importlib.util as _ilu
+_pkg_dir = os.path.dirname(os.path.abspath(__file__))
+_proj_root = os.path.join(_pkg_dir, "..", "..")
+_cfg_spec = _ilu.spec_from_file_location("config", os.path.join(_proj_root, "config.py"))
+_cfg_mod = _ilu.module_from_spec(_cfg_spec)
+_cfg_spec.loader.exec_module(_cfg_mod)
+START_POSITIONS = _cfg_mod.START_POSITIONS
+
 
 def _draw_crosshair(pos, color, items, label=None):
     h = 0.03
@@ -69,24 +77,16 @@ def _parse_command(tokens):
             print(f"  ? '{jaw_type}' – nur 'upper' oder 'lower'")
             return Command("error", {})
         return Command("jaw", {"folder": folder, "type": jaw_type})
-    if tokens[0] == "scan":
-        if len(tokens) == 1:
+    if tokens[0] == "start":
+        if len(tokens) < 2:
+            names = ", ".join(START_POSITIONS.keys())
+            print(f"  ? Verwende: start <{names}>")
             return Command("error", {})
-        path_type = tokens[1]
-        if path_type not in ("outer", "top", "inner"):
-            try:
-                path_type_int = int(tokens[1])
-                return Command("scan_goto", {"index": path_type_int})
-            except ValueError:
-                print(f"  ? '{tokens[1]}' – 'outer', 'top' oder 'inner'")
-                return Command("error", {})
-        distance = 0.08
-        if len(tokens) >= 3:
-            try:
-                distance = float(tokens[2])
-            except ValueError:
-                pass
-        return Command("scan_path", {"type": path_type, "distance": distance})
+        name = tokens[1]
+        if name not in START_POSITIONS:
+            print(f"  ? '{name}' – verfuegbar: {', '.join(START_POSITIONS.keys())}")
+            return Command("error", {})
+        return Command("start_pos", {"name": name})
     if tokens[0] == "+":
         n = 1
         if len(tokens) >= 2:
@@ -95,7 +95,16 @@ def _parse_command(tokens):
             except ValueError:
                 print(f"  ? '{tokens[1]}' ist keine Zahl")
                 return Command("error", {})
-        return Command("scan_next", {"steps": n})
+        return Command("waypoint_next", {"steps": n})
+    if tokens[0] == "-":
+        n = 1
+        if len(tokens) >= 2:
+            try:
+                n = int(tokens[1])
+            except ValueError:
+                print(f"  ? '{tokens[1]}' ist keine Zahl")
+                return Command("error", {})
+        return Command("waypoint_prev", {"steps": n})
 
     linear = True
     idx = 0
@@ -189,12 +198,12 @@ def demo_simulation():
     print("  Reset:       '@'  (nach manuellem Ziehen)")
     print("  Render:      'render' (Cycles-Render in Blender)")
     print("  Gebiss:      'jaw <nr> [upper|lower]' (z. B. jaw 3 upper)")
-    print("  Scan-Bahn:   'scan outer|top|inner' + '<nr>' oder '+' zum Weiterfahren")
+    print("  Start:       'start <Aussen|Oben|Innen>' (Startposition anfahren)")
+    print("  Waypoints:   '+'/'-' naechster/vorheriger Waypoint")
     print("────────────────────────────────────────────")
     items = []
-    current_path = []
-    current_path_idx = 0
-    current_path_name = None
+    current_start = None
+    waypoint_idx = 0
     current_speed = 0.5
     tcp_items = draw_tcp()
 
@@ -253,72 +262,83 @@ def demo_simulation():
                 sim._mirror._jaw_done.wait(timeout=10)
             tcp_items = draw_tcp()
             continue
-        if cmd.action == "scan_path":
-            path_type = cmd.params["type"]
-            dist = cmd.params["distance"]
-            path = sim.compute_scan_path(path_type=path_type, distance=dist)
-            current_path.clear()
-            current_path.extend(path)
-            current_path_idx = 0
-            current_path_name = path_type
-            pybullet.removeAllUserDebugItems()
-            items.clear()
-            tcp_items = []
-            sim._draw_scan_path(path, items)
-            reachable = sum(1 for _, _, ok in path if ok)
-            for i, (pos, ori, ok) in enumerate(path):
-                status = "✓" if ok else "✗"
-                deg = [math.degrees(a) for a in ori]
-                print(f"  #{i+1:2d}  ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})  rx={deg[0]:.0f} ry={deg[1]:.0f} rz={deg[2]:.0f}  {status}")
-            print(f"  → {path_type}: {reachable} von {len(path)} erreichbar")
-            continue
-        if cmd.action == "scan_goto":
-            idx = cmd.params["index"]
-            if not current_path:
-                print(f"  ? Kein Pfad geladen (zuerst 'scan outer/top/inner')")
-                continue
-            if idx < 1 or idx > len(current_path):
-                print(f"  ? #{idx} – Pfad hat {len(current_path)} Punkte")
-                continue
-            pos, ori, ok = current_path[idx - 1]
-            if not ok:
-                print(f"  ⛔ #{idx} nicht erreichbar")
-                continue
-            print(f"  → fahre zu {current_path_name} #{idx}...")
-            pybullet.removeAllUserDebugItems()
-            items.clear()
-            tcp_items = []
-            moved = sim.move_to(pos, ori, linear=True, speed=current_speed)
+        if cmd.action == "start_pos":
+            name = cmd.params["name"]
+            cfg = START_POSITIONS[name]
+            print(f"  → jaw entfernt...")
+            sim.unload_jaw()
+            print(f"  → fahre zu {name}-Start...")
+            moved = sim.move_to(cfg["tcp_pos"], cfg["tcp_ori"], linear=True, speed=current_speed)
             if not moved:
-                moved = sim.move_to(pos, ori, linear=False, speed=current_speed)
-            if not moved:
-                print(f"  ⛔ {current_path_name} #{idx} nicht erreichbar")
+                moved = sim.move_to(cfg["tcp_pos"], cfg["tcp_ori"], linear=False, speed=current_speed)
+            jpos = cfg["jaw_pos"]
+            jeuler = cfg["jaw_euler"]
+            sim.load_jaw_at(cfg["jaw_folder"], cfg["jaw_type"], jpos, jeuler)
+            if sim._mirror is not None:
+                sim._mirror.send_current()
+            print(f"  → jaw eingefuegt ({cfg['jaw_type']}, pos=({jpos[0]:.3f}, {jpos[1]:.3f}, {jpos[2]:.3f}))")
+            current_start = name
+            waypoint_idx = 0
+            wps = cfg["waypoints"]
+            print(f"  Waypoints: {len(wps)}")
+            for i, wp in enumerate(wps):
+                print(f"    {i+1}: {wp.get('label', str(i+1))} ({wp['tcp_pos'][0]:.3f}, {wp['tcp_pos'][1]:.3f}, {wp['tcp_pos'][2]:.3f})")
             tcp_items = draw_tcp()
             continue
-        if cmd.action == "scan_next":
-            steps = cmd.params["steps"]
-            if not current_path:
-                print(f"  ? Kein Pfad geladen (zuerst 'scan outer/top/inner')")
+        if cmd.action == "waypoint_next":
+            if current_start is None:
+                print(f"  ? Keine Startposition aktiv (zuerst 'start <name>')")
                 continue
+            cfg = START_POSITIONS[current_start]
+            wps = cfg["waypoints"]
+            if not wps:
+                print(f"  ? Keine Waypoints definiert fuer {current_start}")
+                continue
+            steps = cmd.params["steps"]
             for s in range(steps):
-                if current_path_idx >= len(current_path):
-                    print(f"  → Pfad-Ende erreicht ({len(current_path)} Punkte)")
+                if waypoint_idx >= len(wps):
+                    print(f"  → Pfad-Ende ({len(wps)} Waypoints)")
                     break
-                pos, ori, ok = current_path[current_path_idx]
-                if not ok:
-                    print(f"  → #{current_path_idx+1} übersprungen (nicht erreichbar)")
-                    current_path_idx += 1
-                    continue
-                print(f"  → {current_path_name} #{current_path_idx+1}/{len(current_path)}...")
+                wp = wps[waypoint_idx]
+                lbl = wp.get("label", str(waypoint_idx + 1))
+                print(f"  → {current_start} {lbl} ({waypoint_idx+1}/{len(wps)})...")
                 pybullet.removeAllUserDebugItems()
                 items.clear()
                 tcp_items = []
-                moved = sim.move_to(pos, ori, linear=True, speed=current_speed)
+                moved = sim.move_to(wp["tcp_pos"], wp["tcp_ori"], linear=True, speed=current_speed)
                 if not moved:
-                    moved = sim.move_to(pos, ori, linear=False, speed=current_speed)
+                    moved = sim.move_to(wp["tcp_pos"], wp["tcp_ori"], linear=False, speed=current_speed)
                 if not moved:
-                    print(f"  ⛔ {current_path_name} #{current_path_idx+1} nicht erreichbar")
-                current_path_idx += 1
+                    print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
+                waypoint_idx += 1
+            tcp_items = draw_tcp()
+            continue
+        if cmd.action == "waypoint_prev":
+            if current_start is None:
+                print(f"  ? Keine Startposition aktiv (zuerst 'start <name>')")
+                continue
+            cfg = START_POSITIONS[current_start]
+            wps = cfg["waypoints"]
+            if not wps:
+                print(f"  ? Keine Waypoints definiert fuer {current_start}")
+                continue
+            steps = cmd.params["steps"]
+            for s in range(steps):
+                if waypoint_idx <= 0:
+                    print(f"  → Startposition erreicht")
+                    break
+                waypoint_idx -= 1
+                wp = wps[waypoint_idx]
+                lbl = wp.get("label", str(waypoint_idx + 1))
+                print(f"  → {current_start} {lbl} ({waypoint_idx+1}/{len(wps)}) zurueck...")
+                pybullet.removeAllUserDebugItems()
+                items.clear()
+                tcp_items = []
+                moved = sim.move_to(wp["tcp_pos"], wp["tcp_ori"], linear=True, speed=current_speed)
+                if not moved:
+                    moved = sim.move_to(wp["tcp_pos"], wp["tcp_ori"], linear=False, speed=current_speed)
+                if not moved:
+                    print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
             tcp_items = draw_tcp()
             continue
 
