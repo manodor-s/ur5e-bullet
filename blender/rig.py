@@ -285,18 +285,27 @@ def add_scanner_and_camera(arm_obj, meshes):
 
 
 def add_lower_jaw():
-    lower_jaw_stl = os.path.join(ROOT, "data", "meshes_jaws", "1", "lower.stl")
-    if not os.path.exists(lower_jaw_stl):
-        print(f"  - Unterkiefer fehlt: {lower_jaw_stl}")
-        return
+    replace_jaw(1, "lower")
 
-    obj = _import_stl(lower_jaw_stl)
+
+def replace_jaw(folder=1, jaw_type="lower"):
+    for name in ("gebiss_lower", "gebiss_upper"):
+        old = bpy.data.objects.get(name)
+        if old is not None:
+            old.select_set(True)
+            bpy.data.objects.remove(old)
+
+    stl_path = os.path.join(ROOT, "data", "meshes_jaws", str(folder), f"{jaw_type}.stl")
+    if not os.path.exists(stl_path):
+        print(f"  - Jaw fehlt: {stl_path}")
+        return False
+
+    obj = _import_stl(stl_path)
     if not obj or obj.type != "MESH":
-        print("  ! Unterkiefer-Import fehlgeschlagen")
-        return
+        print(f"  ! Jaw-Import fehlgeschlagen: {stl_path}")
+        return False
 
-    obj.name = "gebiss_lower"
-    # STL liegt in mm vor -> 0.001*S (== 0.01 bei S=10)
+    obj.name = f"gebiss_{jaw_type}"
     obj.scale = (0.001 * S, 0.001 * S, 0.001 * S)
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
@@ -305,18 +314,21 @@ def add_lower_jaw():
     obj.location = Vector((0.85 * S, 0, 0.3 * S))
     obj.rotation_euler = (0, 0, math.radians(90))
 
-    mat = bpy.data.materials.new("GebissMaterial")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes.get("Principled BSDF")
-    if bsdf:
-        bsdf.inputs["Roughness"].default_value = 0.8
-        bsdf.inputs["Specular IOR Level"].default_value = 0.2
+    mat = bpy.data.materials.get("GebissMaterial")
+    if mat is None:
+        mat = bpy.data.materials.new("GebissMaterial")
+        mat.use_nodes = True
+        bsdf = mat.node_tree.nodes.get("Principled BSDF")
+        if bsdf:
+            bsdf.inputs["Roughness"].default_value = 0.8
+            bsdf.inputs["Specular IOR Level"].default_value = 0.2
     if obj.data.materials:
         obj.data.materials[0] = mat
     else:
         obj.data.materials.append(mat)
 
-    print(f"  + gebiss_lower -> ({obj.location.x:.2f}, {obj.location.y:.2f}, {obj.location.z:.2f})")
+    print(f"  + {obj.name} -> ({obj.location.x:.2f}, {obj.location.y:.2f}, {obj.location.z:.2f})")
+    return True
 
 
 def setup_render():

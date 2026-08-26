@@ -14,13 +14,68 @@ from pybullet_planning.interfaces.robots.link import get_self_link_pairs
 from pybullet_planning.interfaces.robots.joint import get_movable_joints
 
 from .blender_link import BlenderMirror
+from .decimate_stl import read_stl, decimate, write_stl
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
+_JAWS_DIR = os.path.join(_PKG_DIR, "..", "..", "data", "meshes_jaws")
 ROBOT_URDF_PATH = os.path.join(_PKG_DIR, "ur_e_description", "urdf", "ur5e.urdf")
 TABLE_URDF_PATH = os.path.join(pybullet_data.getDataPath(), "table/table.urdf")
-GEBISS_STL = os.path.join(_PKG_DIR, "..", "..", "data", "meshes_jaws", "1", "lower.stl")
-GEBISS_COLL_STL = os.path.join(_PKG_DIR, "..", "..", "data", "meshes_jaws", "1", "lower_coll.stl")
 GEBISS_SCALE = [0.001, 0.001, 0.001]
+GEBISS_POSITION = [0.85, 0, 0.3]
+GEBISS_EULER = [0, 0, math.pi / 2]
+GEBISS_COLL_CELL = 1.5
+
+
+def _compute_orientation(look_dir):
+    look = np.array(look_dir, dtype=np.float64)
+    norm_val = np.linalg.norm(look)
+    if norm_val < 1e-10:
+        return [0.0, 0.0, 0.0]
+    look = look / norm_val
+    world_up = np.array([0.0, 0.0, 1.0])
+    right = np.cross(look, world_up)
+    if np.linalg.norm(right) < 1e-6:
+        right = np.array([1.0, 0.0, 0.0])
+    right = right / np.linalg.norm(right)
+    up = np.cross(right, look)
+    R = np.column_stack([right, up, look])
+    trace = R[0, 0] + R[1, 1] + R[2, 2]
+    if trace > 0:
+        s = 0.5 / np.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (R[2, 1] - R[1, 2]) * s
+        y = (R[0, 2] - R[2, 0]) * s
+        z = (R[1, 0] - R[0, 1]) * s
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+        w = (R[2, 1] - R[1, 2]) / s
+        x = 0.25 * s
+        y = (R[0, 1] + R[1, 0]) / s
+        z = (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+        w = (R[0, 2] - R[2, 0]) / s
+        x = (R[0, 1] + R[1, 0]) / s
+        y = 0.25 * s
+        z = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+        w = (R[1, 0] - R[0, 1]) / s
+        x = (R[0, 2] + R[2, 0]) / s
+        y = (R[1, 2] + R[2, 1]) / s
+        z = 0.25 * s
+    q = [w, x, y, z]
+    q = q / np.linalg.norm(q)
+    return list(pybullet.getEulerFromQuaternion(q))
+
+
+def _classify_normal(normal):
+    z = normal[2]
+    if z > 0.5:
+        return "oben"
+    if z < -0.5:
+        return "innen"
+    return "seitlich"
 
 
 class UR5Sim():
@@ -87,21 +142,114 @@ class UR5Sim():
         self._table = pybullet.loadURDF(
             TABLE_URDF_PATH, [0.5, 0, -0.6300], [0, 0, 0, 1],
         )
-        gebiss_vis = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=GEBISS_STL, meshScale=GEBISS_SCALE)
+        self._current_jaw_folder = 1
+        self._current_jaw_type = "lower"
+        vis_path, col_path = self._resolve_jaw_paths(1, "lower")
+        gebiss_vis = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=vis_path, meshScale=GEBISS_SCALE)
         gebiss_col = pybullet.createCollisionShape(
-            pybullet.GEOM_MESH, fileName=GEBISS_COLL_STL, meshScale=GEBISS_SCALE,
+            pybullet.GEOM_MESH, fileName=col_path, meshScale=GEBISS_SCALE,
             flags=pybullet.GEOM_FORCE_CONCAVE_TRIMESH,
         )
         self._gebiss = pybullet.createMultiBody(
             baseVisualShapeIndex=gebiss_vis,
             baseCollisionShapeIndex=gebiss_col,
-            basePosition=[0.85, 0, 0.3],
-            baseOrientation=pybullet.getQuaternionFromEuler([0, 0, math.pi / 2]),
+            basePosition=GEBISS_POSITION,
+            baseOrientation=pybullet.getQuaternionFromEuler(GEBISS_EULER),
         )
         return pybullet.loadURDF(
             ROBOT_URDF_PATH, [0, 0, 0], [0, 0, 0, 1],
             flags=pybullet.URDF_USE_SELF_COLLISION,
         )
+
+    @staticmethod
+    def _resolve_jaw_paths(folder, jaw_type="lower"):
+        stl = os.path.join(_JAWS_DIR, str(folder), f"{jaw_type}.stl")
+        if not os.path.exists(stl):
+            raise FileNotFoundError(f"Jaw STL nicht gefunden: {stl}")
+        coll_stl = os.path.join(_JAWS_DIR, str(folder), f"{jaw_type}_coll.stl")
+        if not os.path.exists(coll_stl):
+            print(f"  ~ {jaw_type}_coll.stl fehlt – generiere...")
+            verts, tris = read_stl(stl)
+            rep, new_tris = decimate(verts, tris, GEBISS_COLL_CELL)
+            write_stl(coll_stl, rep, new_tris)
+            print(f"  ~ {len(new_tris)} Dreiecke (Reduktion: {len(new_tris)/len(tris):.1%})")
+        return stl, coll_stl
+
+    def load_jaw(self, folder, jaw_type="lower"):
+        vis_path, col_path = self._resolve_jaw_paths(folder, jaw_type)
+        old_folder = self._current_jaw_folder
+        old_type = self._current_jaw_type
+        pybullet.setRealTimeSimulation(0)
+        pybullet.removeBody(self._gebiss)
+        gebiss_vis = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=vis_path, meshScale=GEBISS_SCALE)
+        gebiss_col = pybullet.createCollisionShape(
+            pybullet.GEOM_MESH, fileName=col_path, meshScale=GEBISS_SCALE,
+            flags=pybullet.GEOM_FORCE_CONCAVE_TRIMESH,
+        )
+        self._gebiss = pybullet.createMultiBody(
+            baseVisualShapeIndex=gebiss_vis,
+            baseCollisionShapeIndex=gebiss_col,
+            basePosition=GEBISS_POSITION,
+            baseOrientation=pybullet.getQuaternionFromEuler(GEBISS_EULER),
+        )
+        if self._check_jaw_collision():
+            pybullet.removeBody(self._gebiss)
+            vis_path2, col_path2 = self._resolve_jaw_paths(old_folder, old_type)
+            gebiss_vis2 = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=vis_path2, meshScale=GEBISS_SCALE)
+            gebiss_col2 = pybullet.createCollisionShape(
+                pybullet.GEOM_MESH, fileName=col_path2, meshScale=GEBISS_SCALE,
+                flags=pybullet.GEOM_FORCE_CONCAVE_TRIMESH,
+            )
+            self._gebiss = pybullet.createMultiBody(
+                baseVisualShapeIndex=gebiss_vis2,
+                baseCollisionShapeIndex=gebiss_col2,
+                basePosition=GEBISS_POSITION,
+                baseOrientation=pybullet.getQuaternionFromEuler(GEBISS_EULER),
+            )
+            pybullet.setRealTimeSimulation(1)
+            print(f"  ⛔ Kollision mit Scanner – jaw abgebrochen")
+            return False
+        pybullet.setRealTimeSimulation(1)
+        self._current_jaw_folder = folder
+        self._current_jaw_type = jaw_type
+        return True
+
+    def _check_jaw_collision(self):
+        for i in range(-1, self.num_joints):
+            if pybullet.getClosestPoints(self._gebiss, self.ur5, 0.0, linkIndexB=i):
+                return True
+        return False
+
+    def compute_scan_positions(self, distance=0.08, max_positions=20):
+        vis_path, _ = self._resolve_jaw_paths(self._current_jaw_folder, self._current_jaw_type)
+        verts, tris = read_stl(vis_path)
+        R_body = np.array(pybullet.getMatrixFromQuaternion(
+            pybullet.getQuaternionFromEuler(GEBISS_EULER)
+        )).reshape(3, 3)
+        verts = (R_body @ (verts * np.array(GEBISS_SCALE)).T).T + np.array(GEBISS_POSITION)
+        n_tris = len(tris)
+        if n_tris == 0:
+            return []
+        step = max(1, n_tris // max_positions)
+        current_joints = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
+        results = []
+        for idx in range(0, n_tris, step):
+            i0, i1, i2 = tris[idx]
+            v0, v1, v2 = verts[i0], verts[i1], verts[i2]
+            centroid = (v0 + v1 + v2) / 3.0
+            edge1 = v1 - v0
+            edge2 = v2 - v0
+            normal = np.cross(edge1, edge2)
+            norm_val = np.linalg.norm(normal)
+            if norm_val < 1e-10:
+                continue
+            normal = normal / norm_val
+            tcp_pos = centroid + normal * distance
+            tcp_ori = _compute_orientation(-normal)
+            classification = _classify_normal(normal)
+            ok = self._conf_for(self._tcp_to_ee(list(tcp_pos), list(tcp_ori)), seed=current_joints) is not None
+            results.append((list(tcp_pos), list(tcp_ori), ok, classification))
+        return results
 
     def set_joint_angles(self, joint_angles):
         pybullet.setJointMotorControlArray(

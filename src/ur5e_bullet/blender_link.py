@@ -19,6 +19,7 @@ class BlenderMirror:
         self._conn = None
         self._lock = threading.Lock()
         self._render_done = threading.Event()
+        self._jaw_done = threading.Event()
 
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -105,6 +106,8 @@ class BlenderMirror:
         if "render_complete" in msg:
             print(f"\n  Render gespeichert: {msg['render_complete']}")
             self._render_done.set()
+        if "jaw_complete" in msg:
+            self._jaw_done.set()
 
     def send_current(self):
         try:

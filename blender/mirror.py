@@ -136,6 +136,15 @@ def poll():
                 return None
             bpy.context.scene.render.filepath = os.path.join(rig.ROOT, "render.png")
             bpy.app.timers.register(_do_render, first_interval=0)
+        if "replace_jaw" in msg:
+            folder = msg["replace_jaw"].get("folder", 1)
+            jaw_type = msg["replace_jaw"].get("type", "lower")
+
+            def _do_replace_jaw(f=folder, t=jaw_type):
+                rig.replace_jaw(f, t)
+                send_to_host({"jaw_complete": True})
+                return None
+            bpy.app.timers.register(_do_replace_jaw, first_interval=0)
     return 0.05
 
 

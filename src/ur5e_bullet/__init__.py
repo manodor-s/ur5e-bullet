@@ -7,9 +7,8 @@ from .sim import (
     UR5Sim,
     ROBOT_URDF_PATH,
     TABLE_URDF_PATH,
-    GEBISS_STL,
-    GEBISS_COLL_STL,
     GEBISS_SCALE,
+    _JAWS_DIR,
 )
 
 
@@ -57,6 +56,39 @@ def _parse_command(tokens):
         return Command("reset", {})
     if tokens[0] == "render":
         return Command("render", {})
+    if tokens[0] == "jaw":
+        if len(tokens) < 2:
+            print("  ? 'jaw <nr> [upper|lower]' erwartet")
+            return Command("error", {})
+        try:
+            folder = int(tokens[1])
+        except ValueError:
+            print(f"  ? '{tokens[1]}' ist keine gueltige Nr.")
+            return Command("error", {})
+        jaw_type = tokens[2] if len(tokens) >= 3 else "lower"
+        if jaw_type not in ("upper", "lower"):
+            print(f"  ? '{jaw_type}' – nur 'upper' oder 'lower'")
+            return Command("error", {})
+        return Command("jaw", {"folder": folder, "type": jaw_type})
+    if tokens[0] == "scan":
+        if len(tokens) == 1:
+            return Command("scan", {"distance": 0.08, "max_positions": 20})
+        if len(tokens) == 2:
+            try:
+                if "." in tokens[1]:
+                    return Command("scan", {"distance": float(tokens[1]), "max_positions": 20})
+                else:
+                    return Command("scan_goto", {"index": int(tokens[1])})
+            except ValueError:
+                print(f"  ? '{tokens[1]}' verstanden?")
+                return Command("error", {})
+        if len(tokens) >= 3:
+            try:
+                return Command("scan", {"distance": float(tokens[1]), "max_positions": int(tokens[2])})
+            except ValueError:
+                print(f"  ? '{tokens[1]} {tokens[2]}' verstanden?")
+                return Command("error", {})
+        return Command("error", {})
 
     linear = True
     idx = 0
@@ -149,8 +181,11 @@ def demo_simulation():
     print("  Geschw.:     's 0.5' (global, Default 0.5)")
     print("  Reset:       '@'  (nach manuellem Ziehen)")
     print("  Render:      'render' (Cycles-Render in Blender)")
+    print("  Gebiss:      'jaw <nr> [upper|lower]' (z. B. jaw 3 upper)")
+    print("  Scan:        'scan' oder 'scan <abstand>' (Scan-Positionen berechnen)")
     print("────────────────────────────────────────────")
     items = []
+    scan_cache = {}
     current_speed = 0.5
     tcp_items = draw_tcp()
 
@@ -191,6 +226,53 @@ def demo_simulation():
             sim._mirror.send_message({"render": True})
             print("  Render gestartet...")
             sim._mirror._render_done.wait(timeout=300)
+            continue
+        if cmd.action == "jaw":
+            folder = cmd.params["folder"]
+            jaw_type = cmd.params["type"]
+            try:
+                ok = sim.load_jaw(folder, jaw_type)
+            except FileNotFoundError as e:
+                print(f"  ! {e}")
+                continue
+            if not ok:
+                continue
+            print(f"  PyBullet: gebiss_{jaw_type} aus Ordner {folder}")
+            if sim._mirror is not None:
+                sim._mirror._jaw_done.clear()
+                sim._mirror.send_message({"replace_jaw": {"folder": folder, "type": jaw_type}})
+                sim._mirror._jaw_done.wait(timeout=10)
+            tcp_items = draw_tcp()
+            continue
+        if cmd.action == "scan":
+            dist = cmd.params["distance"]
+            maxp = cmd.params["max_positions"]
+            positions = sim.compute_scan_positions(distance=dist, max_positions=maxp)
+            scan_cache.clear()
+            for i, (pos, ori, ok, cls) in enumerate(positions):
+                scan_cache[i] = (pos, ori)
+                status = "✓" if ok else "✗"
+                deg = [math.degrees(a) for a in ori]
+                print(f"  #{i+1:2d}  {cls:9s}  ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})  rx={deg[0]:.0f} ry={deg[1]:.0f} rz={deg[2]:.0f}  {status}")
+            reachable = sum(1 for _, _, ok, _ in positions if ok)
+            print(f"  → {reachable} von {len(positions)} erreichbar")
+            continue
+        if cmd.action == "scan_goto":
+            idx = cmd.params["index"]
+            if idx not in scan_cache:
+                print(f"  ? Position #{idx} nicht gefunden (scan zuerst ausfuehren)")
+                continue
+            pos, ori = scan_cache[idx]
+            print(f"  → fahre zu Position #{idx}...")
+            pybullet.removeAllUserDebugItems()
+            items.clear()
+            tcp_items = []
+            ok = sim.move_to(pos, ori, linear=True, speed=current_speed)
+            if not ok:
+                ok = sim.move_to(pos, ori, linear=False, speed=current_speed)
+            if not ok:
+                print(f"  ⛔ Position #{idx} nicht erreichbar")
+            tcp_items = draw_tcp()
             continue
 
         pybullet.removeAllUserDebugItems()
