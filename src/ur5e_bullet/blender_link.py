@@ -129,6 +129,15 @@ class BlenderMirror:
 
     def close(self):
         self._alive = False
+        if self._proc is not None:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    self._proc.kill()
+                except OSError:
+                    pass
         try:
             self._sock.close()
         except OSError:

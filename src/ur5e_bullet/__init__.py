@@ -191,7 +191,6 @@ def demo_simulation():
             sim._mirror.send_message({"render": True})
             print("  Render gestartet...")
             sim._mirror._render_done.wait(timeout=300)
-            print()
             continue
 
         pybullet.removeAllUserDebugItems()
@@ -274,7 +273,8 @@ def demo_simulation():
         items.clear()
         tcp_items = draw_tcp()
 
-
+    if sim._mirror is not None:
+        sim._mirror.close()
 
 if __name__ == "__main__":
     demo_simulation()
