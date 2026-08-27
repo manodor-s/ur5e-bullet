@@ -100,10 +100,16 @@ START_POSITIONS = {
         "jaw_euler_deg": [0, 0, 90],
         "jaw_folder": 1,
         "jaw_type":  "lower",
-        "waypoints": [
-            {"tcp_pos": [0.90, -0.03, 0.29], "tcp_ori_deg": [0, 0, 90], "label": "1"},
-            {"tcp_pos": [0.88, -0.01, 0.29], "tcp_ori_deg": [0, 0, 90], "label": "2"},
-        ],
+        # Parametrische Waypoint-Generierung: Parabel x = x0 + a*value^2, z = z.
+        # 'values' = Verlaufsparameter je Punkt (hier y). Form per 'a' live anpassbar.
+        # Erster Wert (0) = Scheitelpunkt x0, der dem Start-tcp_pos entspricht.
+        "parabola": {"x0": 0.615, "a": 20, "z": 0.295, "n": 20},
+        "values": [0.0,
+                   0.0111, 0.0222, 0.0333, 0.0444, 0.0556, 0.0667, 0.0778, 0.0889, 0.1000,
+                   -0.1000, -0.0889, -0.0778, -0.0667, -0.0556, -0.0444, -0.0333, -0.0222, -0.0111, -0.0056],
+        # Optional: Python-Ausdruck (String) oder Callable(value) -> [rx,ry,rz] in Grad.
+        # Ohne diesen Key gilt Default [0, 0, 90].
+        # "ori_func": "[90, 0, 0]",
     },
     "aussen2": {
         "tcp_pos":  [0.615, 0, 0.295],
@@ -115,10 +121,10 @@ START_POSITIONS = {
         "jaw_euler_deg": [0, 0, 90],
         "jaw_folder": 1,
         "jaw_type":  "lower",
-        "waypoints": [
-            {"tcp_pos": [0.90, -0.03, 0.29], "tcp_ori_deg": [0, 0, 90], "label": "1"},
-            {"tcp_pos": [0.88, -0.01, 0.29], "tcp_ori_deg": [0, 0, 90], "label": "2"},
-        ],
+        "parabola": {"x0": 0.615, "a": 18.5, "z": 0.295, "n": 20},
+        "values": [0.0,
+                   0.0111, 0.0222, 0.0333, 0.0444, 0.0556, 0.0667, 0.0778, 0.0889, 0.1000,
+                   -0.1000, -0.0889, -0.0778, -0.0667, -0.0556, -0.0444, -0.0333, -0.0222, -0.0111, -0.0056],
     },
     "oben": {
         "tcp_pos":  [0.85, 0.0, 0.38],
