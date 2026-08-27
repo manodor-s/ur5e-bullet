@@ -133,7 +133,7 @@ def _draw_waypoints(wps, active_idx=None):
     line_color = [0.2, 0.8, 1.0, 0.4]
     for i, wp in enumerate(wps):
         pos = wp["tcp_pos"]
-        _draw_crosshair(pos, color, items, wp.get("label", str(i)))
+        _draw_crosshair(pos, color, items, wp.get("name") or wp.get("label", str(i)))
         if i > 0:
             items.append(pybullet.addUserDebugLine(wps[i-1]["tcp_pos"], pos, line_color, 1))
     if len(wps) > 1:
@@ -142,49 +142,17 @@ def _draw_waypoints(wps, active_idx=None):
 
 
 def _resolve_waypoints(cfg):
-    """Erzeugt die Liste der Waypoint-Dicts aus einer parametrischen Spezifikation.
+    """Erzeugt die Liste der Waypoint-Dicts einer Startposition.
 
-    Zwei Varianten, erkennbar am Key der Startposition:
-      - 'waypoints': feste Liste (dicts mit tcp_pos/tcp_ori_deg), wie bisher.
-      - 'parabola' : Parabel  x = x0 + a * value^2, z = z. Die 'values'-Liste
-                     gibt je Punkt den Verlaufsparameter (hier y) vor; Position
-                     und Orientierung werden daraus berechnet.
-    Optionale 'ori_func' je Startposition: Python-Ausdruck (String) oder
-    Callable, das aus dem Wert (Variable 'value') die TCP-Orientierung
-    [rx, ry, rz] in Grad liefert. Ohne ori_func gilt Default [0, 0, 90].
+    - 'generator' : echte Python-Funktion (in config.py definiert), die aus
+                    der Startposition-CFG Position UND Orientierung berechnet.
+    - 'waypoints' : fallback auf eine feste Liste (dicts mit tcp_pos/
+                    tcp_ori_deg), wie bisher.
     """
-    if "parabola" in cfg:
-        par = cfg["parabola"]
-        x0 = par.get("x0", 0.0)
-        a = par.get("a", 1.0)
-        z = par.get("z", 0.0)
-        y_max = par.get("y_max")
-        n = par.get("n", 20)
-        values = cfg.get("values")
-        if not values:
-            if y_max is None:
-                values = [float(i) for i in range(n)]
-            else:
-                values = [-y_max + 2 * y_max * i / (n - 1) for i in range(n)]
-        ori_func = cfg.get("ori_func")
-        wps = []
-        for j, value in enumerate(values):
-            v = float(value)
-            pos = [x0 + a * v * v, v, z]
-            o = _resolve_ori(ori_func, value)
-            wps.append({"tcp_pos": pos, "tcp_ori_deg": o, "label": str(j), "value": value})
-        return wps
+    gen = cfg.get("generator")
+    if callable(gen):
+        return gen(cfg)
     return cfg.get("waypoints", [])
-
-
-def _resolve_ori(ori_func, value):
-    if ori_func is None:
-        return [0.0, 0.0, 90.0]
-    if callable(ori_func):
-        return list(ori_func(value))
-    g = {"value": value}
-    result = eval(ori_func, {"__builtins__": {}}, g)
-    return [float(x) for x in result]
 
 
 def demo_simulation():
@@ -195,12 +163,45 @@ def demo_simulation():
         return _draw_crosshair(pos, [0, 1, 0], [])
 
     def draw_waypoints():
+        for it in waypoint_items:
+            try:
+                pybullet.removeUserDebugItem(it)
+            except Exception:
+                pass
+        waypoint_items.clear()
         if current_start is None:
-            return []
+            return
         wps = _resolve_waypoints(START_POSITIONS[current_start])
         if not wps:
-            return []
-        return _draw_waypoints(wps, waypoint_idx)
+            return
+        waypoint_items.extend(_draw_waypoints(wps, waypoint_idx))
+
+    def clear_temps():
+        """Entfernt nur die temporaeren Vorschau- und TCP-Items.
+        Das persistente Waypoint-Overlay (waypoint_items) bleibt davon unberuehrt,
+        damit es nicht bei jeder Bewegung kurz verschwindet/neu gezeichnet wird."""
+        for it in items:
+            try:
+                pybullet.removeUserDebugItem(it)
+            except Exception:
+                pass
+        items.clear()
+        for it in tcp_items:
+            try:
+                pybullet.removeUserDebugItem(it)
+            except Exception:
+                pass
+        tcp_items.clear()
+
+    def refresh_overlay():
+        """Baut das TCP-Crosshair UND das Waypoint-Overlay nach einer Bewegung
+        wieder auf. move_to schaltet das Rendering waehrend der Bewegung ab
+        (configureDebugVisualizer COV_ENABLE_RENDERING) und wieder an; dabei
+        verwirft pybullet die Debug-Items, daher muessen sie danach neu erzeugt
+        werden. draw_waypoints() raeumt alte Items selbst auf (kein Doppel-Overlay)."""
+        tcp_items.clear()
+        tcp_items.extend(draw_tcp())
+        draw_waypoints()
 
     def draw_probe_preview(last_valid_position, collision_position, deviation_mm,
                            rrt_waypoints, start_tcp, target_position, target_orientation,
@@ -302,27 +303,18 @@ def demo_simulation():
             break
         if cmd.action == "offset":
             sim.set_tool_offset(cmd.params["pos"])
-            pybullet.removeAllUserDebugItems()
-            items.clear()
-            tcp_items = []
-            waypoint_items = draw_waypoints()
+            clear_temps()
             continue
         if cmd.action == "reset" and sim._last_conf is not None:
-            pybullet.removeAllUserDebugItems()
-            items.clear()
-            tcp_items = []
+            clear_temps()
             sim._execute([sim._last_conf])
-            tcp_items = draw_tcp()
-            waypoint_items = draw_waypoints()
+            refresh_overlay()
             continue
         if cmd.action == "speed":
             current_speed = cmd.params["speed"]
             print(f"  Geschwindigkeit: {current_speed:.2f}")
-            pybullet.removeAllUserDebugItems()
-            items.clear()
-            tcp_items = []
+            clear_temps()
             tcp_items = draw_tcp()
-            waypoint_items = draw_waypoints()
             continue
         if cmd.action == "render":
             sim._mirror._render_done.clear()
@@ -408,9 +400,9 @@ def demo_simulation():
             wps = _resolve_waypoints(cfg)
             print(f"  Waypoints: {len(wps)}")
             for i, wp in enumerate(wps):
-                print(f"    {i+1}: {wp.get('label', str(i+1))} ({wp['tcp_pos'][0]:.3f}, {wp['tcp_pos'][1]:.3f}, {wp['tcp_pos'][2]:.3f})")
+                print(f"    {i+1}: {wp.get('name') or wp.get('label', str(i+1))} ({wp['tcp_pos'][0]:.3f}, {wp['tcp_pos'][1]:.3f}, {wp['tcp_pos'][2]:.3f})")
             tcp_items = draw_tcp()
-            waypoint_items = draw_waypoints()
+            draw_waypoints()
             continue
         if cmd.action == "waypoint_next":
             if current_start is None:
@@ -427,11 +419,9 @@ def demo_simulation():
                     print(f"  → Pfad-Ende ({len(wps)} Waypoints)")
                     break
                 wp = wps[waypoint_idx]
-                lbl = wp.get("label", str(waypoint_idx + 1))
+                lbl = wp.get("name") or wp.get("label", str(waypoint_idx + 1))
                 print(f"  → {current_start} {lbl} ({waypoint_idx+1}/{len(wps)})...")
-                pybullet.removeAllUserDebugItems()
-                items.clear()
-                tcp_items = []
+                clear_temps()
                 wp_ori = [math.radians(v) for v in wp["tcp_ori_deg"]]
                 moved = sim.move_to(wp["tcp_pos"], wp_ori, linear=True, speed=current_speed)
                 if not moved:
@@ -440,7 +430,7 @@ def demo_simulation():
                     print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
                 waypoint_idx += 1
             tcp_items = draw_tcp()
-            waypoint_items = draw_waypoints()
+            draw_waypoints()
             continue
         if cmd.action == "waypoint_prev":
             if current_start is None:
@@ -458,11 +448,9 @@ def demo_simulation():
                     break
                 waypoint_idx -= 1
                 wp = wps[waypoint_idx]
-                lbl = wp.get("label", str(waypoint_idx + 1))
+                lbl = wp.get("name") or wp.get("label", str(waypoint_idx + 1))
                 print(f"  → {current_start} {lbl} ({waypoint_idx+1}/{len(wps)}) zurueck...")
-                pybullet.removeAllUserDebugItems()
-                items.clear()
-                tcp_items = []
+                clear_temps()
                 wp_ori = [math.radians(v) for v in wp["tcp_ori_deg"]]
                 moved = sim.move_to(wp["tcp_pos"], wp_ori, linear=True, speed=current_speed)
                 if not moved:
@@ -470,13 +458,10 @@ def demo_simulation():
                 if not moved:
                     print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
             tcp_items = draw_tcp()
-            waypoint_items = draw_waypoints()
+            draw_waypoints()
             continue
 
-        pybullet.removeAllUserDebugItems()
-        items.clear()
-        tcp_items = []
-        waypoint_items = draw_waypoints()
+        clear_temps()
 
         if cmd.action == "error":
             continue
@@ -550,10 +535,8 @@ def demo_simulation():
                 ok = sim.move_to(target_pos, target_ori, linear=linear, speed=current_speed)
 
         sim._remove_ghost()
-        pybullet.removeAllUserDebugItems()
-        items.clear()
+        clear_temps()
         tcp_items = draw_tcp()
-        waypoint_items = draw_waypoints()
 
     if sim._mirror is not None:
         sim._mirror.close()

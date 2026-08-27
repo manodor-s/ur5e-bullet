@@ -88,6 +88,48 @@ JOINTS = [
 #   nacheinander angefahren werden (jeweils mit eigenem IK-Seed), bevor die
 #   endgueltige tcp_pos angefahren wird – zur besseren Beeinflussung des IK.
 #   Achtung: approach != waypoints (letztere sind die '+/'-navigierbaren Punkte).
+
+# ── Waypoint-Generator (Parabel) ──
+# Echte Python-Funktion, kann frei angepasst werden. Sie wird je Startposition
+# ueber den Key 'generator' referenziert und berechnet Position UND Orientierung.
+#
+# Position (Parabel):   x = x0 + a*value^2,  y = value,  z = z
+#   value-laeuft kleinteilig von -y_max .. +y_max (verteilt auf n Punkte).
+#
+# Orientierung (3 Achsen getrennt anpassbar):
+#   rot[k] = ori0[k] + ori_scale[k] * frac
+#   - ori0    : Startwinkel je Achse (Grad); Fallback: cfg['tcp_ori_deg']
+#   - ori_scale: Grad-Spanne je Achse (Rx, Ry, Rz) ueber den kompletten Pfad
+#   - frac    : Verlauf 0..1 je Punkt (Default idx/(n-1); Punkt 5 von 10 -> 0.5)
+#   Beim Aufruf sind 'idx' (0..n-1) und 'n' verfuegbar.
+def parabola_waypoints(cfg):
+    p = cfg.get("parabola", {})
+    n = int(p.get("n", 20))
+    y_max = float(p.get("y_max", 0.05))
+    x0 = float(p.get("x0", 0.0))
+    a = float(p.get("a", 1.0))
+    z = float(p.get("z", 0.0))
+
+    ori0 = cfg.get("ori0")
+    if ori0 is None:
+        ori0 = cfg["tcp_ori_deg"]
+    scale = cfg.get("ori_scale", [0.0, 0.0, 0.0])
+
+    wps = []
+    for idx in range(n):
+        value = -y_max + 2 * y_max * idx / (n - 1) if n > 1 else 0.0
+        x = x0 + a * value * value
+        frac = idx / (n - 1) if n > 1 else 0.0
+        rot = [ori0[k] + scale[k] * frac for k in range(3)]
+        wps.append({
+            "name": f"W{idx}",
+            "value": value,
+            "tcp_pos": [x, value, z],
+            "tcp_ori_deg": rot,
+        })
+    return wps
+
+
 START_POSITIONS = {
     "aussen1": {
         "tcp_pos":  [0.615, 0, 0.295],
@@ -96,20 +138,13 @@ START_POSITIONS = {
             {"tcp_pos": [0.85, 0, 0.38], "tcp_ori_deg": [0, 0, 0], "label": "1"},
             {"tcp_pos": [0.615, 0, 0.295], "tcp_ori_deg": [0, 90, 0], "label": "1"},
         ],
-        "jaw_pos":  [0.65, 0, 0.3],
+        "jaw_pos":  [0.9, 0, 0.3],
         "jaw_euler_deg": [0, 0, 90],
         "jaw_folder": 1,
         "jaw_type":  "lower",
-        # Parametrische Waypoint-Generierung: Parabel x = x0 + a*value^2, z = z.
-        # 'values' = Verlaufsparameter je Punkt (hier y). Form per 'a' live anpassbar.
-        # Erster Wert (0) = Scheitelpunkt x0, der dem Start-tcp_pos entspricht.
-        "parabola": {"x0": 0.615, "a": 20, "z": 0.295, "n": 20},
-        "values": [0.0,
-                   0.0111, 0.0222, 0.0333, 0.0444, 0.0556, 0.0667, 0.0778, 0.0889, 0.1000,
-                   -0.1000, -0.0889, -0.0778, -0.0667, -0.0556, -0.0444, -0.0333, -0.0222, -0.0111, -0.0056],
-        # Optional: Python-Ausdruck (String) oder Callable(value) -> [rx,ry,rz] in Grad.
-        # Ohne diesen Key gilt Default [0, 0, 90].
-        # "ori_func": "[90, 0, 0]",
+        "generator": parabola_waypoints,
+        "parabola":  {"x0": 0.615, "a": 20, "z": 0.295, "n": 20, "y_max": 0.05},
+        "ori_scale": [90, 30, 60],
     },
     "aussen2": {
         "tcp_pos":  [0.615, 0, 0.295],
@@ -121,10 +156,9 @@ START_POSITIONS = {
         "jaw_euler_deg": [0, 0, 90],
         "jaw_folder": 1,
         "jaw_type":  "lower",
-        "parabola": {"x0": 0.615, "a": 18.5, "z": 0.295, "n": 20},
-        "values": [0.0,
-                   0.0111, 0.0222, 0.0333, 0.0444, 0.0556, 0.0667, 0.0778, 0.0889, 0.1000,
-                   -0.1000, -0.0889, -0.0778, -0.0667, -0.0556, -0.0444, -0.0333, -0.0222, -0.0111, -0.0056],
+        "generator": parabola_waypoints,
+        "parabola":  {"x0": 0.615, "a": 18.5, "z": 0.295, "n": 20, "y_max": 0.05},
+        "ori_scale": [90, 30, 60],
     },
     "oben": {
         "tcp_pos":  [0.85, 0.0, 0.38],
