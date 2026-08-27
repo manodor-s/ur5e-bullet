@@ -27,7 +27,7 @@ _cfg_mod = _ilu.module_from_spec(_cfg)
 _cfg.loader.exec_module(_cfg_mod)
 GEBISS_SCALE = _cfg_mod.GEBISS_SCALE
 GEBISS_POSITION = _cfg_mod.GEBISS_POSITION
-GEBISS_EULER = _cfg_mod.GEBISS_EULER
+GEBISS_EULER = [math.radians(v) for v in _cfg_mod.GEBISS_EULER_DEG]
 GEBISS_COLL_CELL = _cfg_mod.GEBISS_COLL_CELL
 TOOL_OFFSET_POS = _cfg_mod.TOOL_OFFSET_POS
 TOOL_OFFSET_ORN = _cfg_mod.TOOL_OFFSET_ORN
@@ -37,73 +37,9 @@ RRT_RESTARTS = _cfg_mod.RRT_RESTARTS
 RRT_SMOOTH = _cfg_mod.RRT_SMOOTH
 RRT_SEED = _cfg_mod.RRT_SEED
 GHOST_COLOR = _cfg_mod.GHOST_COLOR
-
-
-def _compute_orientation(look_dir):
-    look = np.array(look_dir, dtype=np.float64)
-    norm_val = np.linalg.norm(look)
-    if norm_val < 1e-10:
-        return [0.0, 0.0, 0.0]
-    look = look / norm_val
-    world_up = np.array([0.0, 0.0, 1.0])
-    right = np.cross(look, world_up)
-    if np.linalg.norm(right) < 1e-6:
-        right = np.array([1.0, 0.0, 0.0])
-    right = right / np.linalg.norm(right)
-    up = np.cross(right, look)
-    R = np.column_stack([right, up, look])
-    trace = R[0, 0] + R[1, 1] + R[2, 2]
-    if trace > 0:
-        s = 0.5 / np.sqrt(trace + 1.0)
-        w = 0.25 / s
-        x = (R[2, 1] - R[1, 2]) * s
-        y = (R[0, 2] - R[2, 0]) * s
-        z = (R[1, 0] - R[0, 1]) * s
-    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
-        w = (R[2, 1] - R[1, 2]) / s
-        x = 0.25 * s
-        y = (R[0, 1] + R[1, 0]) / s
-        z = (R[0, 2] + R[2, 0]) / s
-    elif R[1, 1] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
-        w = (R[0, 2] - R[2, 0]) / s
-        x = (R[0, 1] + R[1, 0]) / s
-        y = 0.25 * s
-        z = (R[1, 2] + R[2, 1]) / s
-    else:
-        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
-        w = (R[1, 0] - R[0, 1]) / s
-        x = (R[0, 2] + R[2, 0]) / s
-        y = (R[1, 2] + R[2, 1]) / s
-        z = 0.25 * s
-    q = [w, x, y, z]
-    q = q / np.linalg.norm(q)
-    return list(pybullet.getEulerFromQuaternion(q))
-
-
-def _classify_normal(normal):
-    z = normal[2]
-    if z > 0.5:
-        return "oben"
-    if z < -0.5:
-        return "innen"
-    return "seitlich"
-
-
-def _interp_points(pts, n):
-    if len(pts) < 2 or n < 2:
-        return list(pts)
-    result = []
-    total = len(pts) - 1
-    for i in range(n):
-        t = i / (n - 1) * total
-        idx = min(int(t), total - 1)
-        frac = t - idx
-        p0 = np.array(pts[idx])
-        p1 = np.array(pts[idx + 1])
-        result.append(list(p0 + frac * (p1 - p0)))
-    return result
+JOINT_LOWER_LIMITS = [math.radians(j["lower_deg"]) for j in _cfg_mod.JOINTS]
+JOINT_UPPER_LIMITS = [math.radians(j["upper_deg"]) for j in _cfg_mod.JOINTS]
+JOINT_REST_POSES = [math.radians(j["rest_deg"]) for j in _cfg_mod.JOINTS]
 
 
 class UR5Sim():
@@ -143,10 +79,10 @@ class UR5Sim():
 
         self._joint_ids = [self.joints[n].id for n in self.control_joints]
         self._null_space = (
-            [-math.pi, -math.pi, 0, 0, -math.pi, -math.pi],
-            [math.pi, math.pi, math.pi, 2*math.pi, math.pi, math.pi],
-            [2*math.pi]*6,
-            [0, -math.pi/2, math.pi/2, -math.pi/2, -math.pi/2, 0],
+            list(JOINT_LOWER_LIMITS),
+            list(JOINT_UPPER_LIMITS),
+            [JOINT_UPPER_LIMITS[i] - JOINT_LOWER_LIMITS[i] for i in range(6)],
+            list(JOINT_REST_POSES),
         )
         self._ik_lambda = IK_LAMBDA
         self._collision_link_pairs = get_self_link_pairs(self.ur5, get_movable_joints(self.ur5))
@@ -169,18 +105,7 @@ class UR5Sim():
     def load_robot(self):
         self._current_jaw_folder = 1
         self._current_jaw_type = "lower"
-        vis_path, col_path = self._resolve_jaw_paths(1, "lower")
-        gebiss_vis = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=vis_path, meshScale=GEBISS_SCALE)
-        gebiss_col = pybullet.createCollisionShape(
-            pybullet.GEOM_MESH, fileName=col_path, meshScale=GEBISS_SCALE,
-            flags=pybullet.GEOM_FORCE_CONCAVE_TRIMESH,
-        )
-        self._gebiss = pybullet.createMultiBody(
-            baseVisualShapeIndex=gebiss_vis,
-            baseCollisionShapeIndex=gebiss_col,
-            basePosition=GEBISS_POSITION,
-            baseOrientation=pybullet.getQuaternionFromEuler(GEBISS_EULER),
-        )
+        self._gebiss = None
         return pybullet.loadURDF(
             ROBOT_URDF_PATH, [0, 0, 0], [0, 0, 0, 1],
             flags=pybullet.URDF_USE_SELF_COLLISION,
@@ -267,83 +192,6 @@ class UR5Sim():
             if pybullet.getClosestPoints(self._gebiss, self.ur5, 0.0, linkIndexB=i):
                 return True
         return False
-
-    def _load_jaw_verts(self):
-        vis_path, _ = self._resolve_jaw_paths(self._current_jaw_folder, self._current_jaw_type)
-        verts, tris = read_stl(vis_path)
-        R_body = np.array(pybullet.getMatrixFromQuaternion(
-            pybullet.getQuaternionFromEuler(GEBISS_EULER)
-        )).reshape(3, 3)
-        verts = (R_body @ (verts * np.array(GEBISS_SCALE)).T).T + np.array(GEBISS_POSITION)
-        return verts, tris
-
-    def _compute_arch_centerline(self, verts, n_points=20):
-        y_vals = verts[:, 1]
-        y_min, y_max = y_vals.min(), y_vals.max()
-        if y_max - y_min < 1e-6:
-            return []
-        slice_hw = (y_max - y_min) / n_points * 1.5
-        raw = []
-        for i in range(n_points):
-            y = y_min + (y_max - y_min) * i / (n_points - 1)
-            mask = np.abs(y_vals - y) < slice_hw
-            if mask.sum() < 3:
-                continue
-            xv = verts[mask, 0]
-            zv = verts[mask, 2]
-            raw.append((float(np.mean(xv)), float(y), float(np.mean(zv))))
-        if len(raw) < 2:
-            return raw
-        raw.sort(key=lambda p: p[1])
-        return _interp_points(raw, n_points)
-
-    def compute_scan_path(self, path_type="outer", distance=0.08, n_points=20):
-        verts, tris = self._load_jaw_verts()
-        centerline = self._compute_arch_centerline(verts, n_points)
-        if len(centerline) < 2:
-            return []
-        center = np.mean(centerline, axis=0)
-        outward_normals = []
-        for p in centerline:
-            d = np.array(p[:2]) - np.array(center[:2])
-            n = np.linalg.norm(d)
-            outward_normals.append(d / n if n > 1e-6 else np.array([1.0, 0.0]))
-        current_joints = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-        results = []
-        for i, (cp, out2d) in enumerate(zip(centerline, outward_normals)):
-            out3 = np.array([out2d[0], out2d[1], 0.0])
-            if path_type == "outer":
-                tcp_pos = np.array(cp) + out3 * distance
-                look = -out3
-            elif path_type == "inner":
-                tcp_pos = np.array(cp) - out3 * distance
-                look = out3
-            elif path_type == "top":
-                tcp_pos = np.array(cp) + np.array([0, 0, distance])
-                look = np.array([0, 0, -1.0])
-            else:
-                continue
-            tcp_ori = _compute_orientation(look)
-            ok = self._conf_for(
-                self._tcp_to_ee(list(tcp_pos), list(tcp_ori)), seed=current_joints
-            ) is not None
-            results.append((list(tcp_pos), list(tcp_ori), ok))
-        return results
-
-    def _draw_scan_path(self, path, items):
-        for i, (pos, ori, ok) in enumerate(path):
-            color = [0, 0.8, 0] if ok else [1, 0, 0]
-            h = 0.005
-            items.append(pybullet.addUserDebugLine(
-                [pos[0]-h, pos[1], pos[2]], [pos[0]+h, pos[1], pos[2]], color, 2))
-            items.append(pybullet.addUserDebugLine(
-                [pos[0], pos[1]-h, pos[2]], [pos[0], pos[1]+h, pos[2]], color, 2))
-            items.append(pybullet.addUserDebugLine(
-                [pos[0], pos[1], pos[2]-h], [pos[0], pos[1], pos[2]+h], color, 2))
-            if i < len(path) - 1:
-                npos = path[i + 1][0]
-                items.append(pybullet.addUserDebugLine(pos, npos, [0, 0.6, 0], 1))
-        return items
 
     def set_joint_angles(self, joint_angles):
         pybullet.setJointMotorControlArray(
@@ -741,7 +589,7 @@ class UR5Sim():
             if pybullet.getClosestPoints(self.ur5, self.ur5, 0.0, linkIndexA=i, linkIndexB=j):
                 cf = False
                 break
-        if cf and hasattr(self, '_gebiss'):
+        if cf and getattr(self, '_gebiss', None) is not None:
             cf = not any(
                 pybullet.getClosestPoints(self.ur5, self._gebiss, 0.0, linkIndexA=i)
                 for i in range(-1, self.num_joints)
@@ -752,7 +600,7 @@ class UR5Sim():
 
     def _obstacles(self):
         obs = []
-        if hasattr(self, '_gebiss'):
+        if getattr(self, '_gebiss', None) is not None:
             obs.append(self._gebiss)
         return obs
 

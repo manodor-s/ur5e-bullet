@@ -7,7 +7,6 @@ from .sim import (
     UR5Sim,
     ROBOT_URDF_PATH,
     GEBISS_SCALE,
-    _JAWS_DIR,
 )
 
 import importlib.util as _ilu
@@ -17,6 +16,7 @@ _cfg_spec = _ilu.spec_from_file_location("config", os.path.join(_proj_root, "con
 _cfg_mod = _ilu.module_from_spec(_cfg_spec)
 _cfg_spec.loader.exec_module(_cfg_mod)
 START_POSITIONS = _cfg_mod.START_POSITIONS
+BOOT_START = _cfg_mod.BOOT_START
 
 
 def _draw_crosshair(pos, color, items, label=None):
@@ -190,6 +190,19 @@ def demo_simulation():
                 print(f"  ⛔ Kollision bei ({collision_position[0]:.3f}, {collision_position[1]:.3f}, {collision_position[2]:.3f})")
         return target_position, target_orientation
 
+    if BOOT_START is not None:
+        cfg = BOOT_START
+        ori = [math.radians(v) for v in cfg["tcp_ori_deg"]]
+        print("  Boot: fahre zur Startposition...")
+        ok = sim.move_to(cfg["tcp_pos"], ori, linear=True, speed=0.5)
+        if not ok:
+            ok = sim.move_to(cfg["tcp_pos"], ori, linear=False, speed=0.5)
+        if ok:
+            print(f"  Boot: Startposition erreicht (Gebiss nicht geladen)")
+        else:
+            print("  Boot: Startposition nicht erreichbar – Arm bleibt an Neutralposition")
+        tcp_items = draw_tcp()
+
     print("── UR5e Demo ──────────────────────────────")
     print("Format: x y z rx ry rz oder 'q' zum Beenden")
     print("  Tool-Offset: 'o x y z' (z. B. o 0 0 0.15)")
@@ -265,14 +278,44 @@ def demo_simulation():
         if cmd.action == "start_pos":
             name = cmd.params["name"]
             cfg = START_POSITIONS[name]
+            tcp_ori = [math.radians(v) for v in cfg["tcp_ori_deg"]]
             print(f"  → jaw entfernt...")
             sim.unload_jaw()
+
+            def _dump_pose(tag, pos, ori_deg):
+                q = pybullet.getQuaternionFromEuler(ori_deg)
+                ee = sim._tcp_to_ee(list(pos), list(ori_deg))
+                joints = sim.get_joint_angles()
+                jstr = ", ".join(f"{math.degrees(j):.0f}" for j in joints)
+                print(f"    [dbg {tag}] tcp=({pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}) euler_deg=({math.degrees(ori_deg[0]):.0f},{math.degrees(ori_deg[1]):.0f},{math.degrees(ori_deg[2]):.0f})")
+                print(f"    [dbg {tag}] quat=({q[0]:.3f},{q[1]:.3f},{q[2]:.3f},{q[3]:.3f})")
+                print(f"    [dbg {tag}] ee_pos=({ee[0][0]:.3f},{ee[0][1]:.3f},{ee[0][2]:.3f})")
+                print(f"    [dbg {tag}] joints_deg={jstr}")
+
+            approach = cfg.get("approach", [])
+            for i, a in enumerate(approach):
+                a_ori = [math.radians(v) for v in a["tcp_ori_deg"]]
+                lbl = a.get("label", str(i + 1))
+                print(f"  → approach {lbl}...")
+                _dump_pose(f"approach{lbl}", a["tcp_pos"], a_ori)
+                moved = sim.move_to(a["tcp_pos"], a_ori, linear=True, speed=current_speed)
+                if not moved:
+                    moved = sim.move_to(a["tcp_pos"], a_ori, linear=False, speed=current_speed)
+                if not moved:
+                    print(f"  ⛔ Approach {lbl} nicht erreichbar – start abgebrochen")
+                    tcp_items = draw_tcp()
+                    continue
             print(f"  → fahre zu {name}-Start...")
-            moved = sim.move_to(cfg["tcp_pos"], cfg["tcp_ori"], linear=True, speed=current_speed)
+            _dump_pose(f"final", cfg["tcp_pos"], tcp_ori)
+            moved = sim.move_to(cfg["tcp_pos"], tcp_ori, linear=True, speed=current_speed)
             if not moved:
-                moved = sim.move_to(cfg["tcp_pos"], cfg["tcp_ori"], linear=False, speed=current_speed)
+                moved = sim.move_to(cfg["tcp_pos"], tcp_ori, linear=False, speed=current_speed)
+            if not moved:
+                print(f"  ⛔ {name}-Start nicht erreichbar – start abgebrochen")
+                tcp_items = draw_tcp()
+                continue
             jpos = cfg["jaw_pos"]
-            jeuler = cfg["jaw_euler"]
+            jeuler = [math.radians(v) for v in cfg["jaw_euler_deg"]]
             sim.load_jaw_at(cfg["jaw_folder"], cfg["jaw_type"], jpos, jeuler)
             if sim._mirror is not None:
                 sim._mirror.send_current()
@@ -305,9 +348,10 @@ def demo_simulation():
                 pybullet.removeAllUserDebugItems()
                 items.clear()
                 tcp_items = []
-                moved = sim.move_to(wp["tcp_pos"], wp["tcp_ori"], linear=True, speed=current_speed)
+                wp_ori = [math.radians(v) for v in wp["tcp_ori_deg"]]
+                moved = sim.move_to(wp["tcp_pos"], wp_ori, linear=True, speed=current_speed)
                 if not moved:
-                    moved = sim.move_to(wp["tcp_pos"], wp["tcp_ori"], linear=False, speed=current_speed)
+                    moved = sim.move_to(wp["tcp_pos"], wp_ori, linear=False, speed=current_speed)
                 if not moved:
                     print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
                 waypoint_idx += 1
@@ -334,9 +378,10 @@ def demo_simulation():
                 pybullet.removeAllUserDebugItems()
                 items.clear()
                 tcp_items = []
-                moved = sim.move_to(wp["tcp_pos"], wp["tcp_ori"], linear=True, speed=current_speed)
+                wp_ori = [math.radians(v) for v in wp["tcp_ori_deg"]]
+                moved = sim.move_to(wp["tcp_pos"], wp_ori, linear=True, speed=current_speed)
                 if not moved:
-                    moved = sim.move_to(wp["tcp_pos"], wp["tcp_ori"], linear=False, speed=current_speed)
+                    moved = sim.move_to(wp["tcp_pos"], wp_ori, linear=False, speed=current_speed)
                 if not moved:
                     print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
             tcp_items = draw_tcp()
