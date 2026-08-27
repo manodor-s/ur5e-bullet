@@ -26,8 +26,6 @@ _cfg = _ilu.spec_from_file_location("config", os.path.join(_PROJECT_ROOT, "confi
 _cfg_mod = _ilu.module_from_spec(_cfg)
 _cfg.loader.exec_module(_cfg_mod)
 GEBISS_SCALE = _cfg_mod.GEBISS_SCALE
-GEBISS_POSITION = _cfg_mod.GEBISS_POSITION
-GEBISS_EULER = [math.radians(v) for v in _cfg_mod.GEBISS_EULER_DEG]
 GEBISS_COLL_CELL = _cfg_mod.GEBISS_COLL_CELL
 TOOL_OFFSET_POS = _cfg_mod.TOOL_OFFSET_POS
 TOOL_OFFSET_ORN = _cfg_mod.TOOL_OFFSET_ORN
@@ -105,6 +103,8 @@ class UR5Sim():
     def load_robot(self):
         self._current_jaw_folder = 1
         self._current_jaw_type = "lower"
+        self._jaw_pos = None
+        self._jaw_euler = None
         self._gebiss = None
         return pybullet.loadURDF(
             ROBOT_URDF_PATH, [0, 0, 0], [0, 0, 0, 1],
@@ -125,53 +125,25 @@ class UR5Sim():
             print(f"  ~ {len(new_tris)} Dreiecke (Reduktion: {len(new_tris)/len(tris):.1%})")
         return stl, coll_stl
 
-    def load_jaw(self, folder, jaw_type="lower"):
-        vis_path, col_path = self._resolve_jaw_paths(folder, jaw_type)
-        old_folder = self._current_jaw_folder
-        old_type = self._current_jaw_type
-        pybullet.setRealTimeSimulation(0)
-        pybullet.removeBody(self._gebiss)
-        gebiss_vis = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=vis_path, meshScale=GEBISS_SCALE)
-        gebiss_col = pybullet.createCollisionShape(
-            pybullet.GEOM_MESH, fileName=col_path, meshScale=GEBISS_SCALE,
-            flags=pybullet.GEOM_FORCE_CONCAVE_TRIMESH,
-        )
-        self._gebiss = pybullet.createMultiBody(
-            baseVisualShapeIndex=gebiss_vis,
-            baseCollisionShapeIndex=gebiss_col,
-            basePosition=GEBISS_POSITION,
-            baseOrientation=pybullet.getQuaternionFromEuler(GEBISS_EULER),
-        )
-        if self._check_jaw_collision():
-            pybullet.removeBody(self._gebiss)
-            vis_path2, col_path2 = self._resolve_jaw_paths(old_folder, old_type)
-            gebiss_vis2 = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=vis_path2, meshScale=GEBISS_SCALE)
-            gebiss_col2 = pybullet.createCollisionShape(
-                pybullet.GEOM_MESH, fileName=col_path2, meshScale=GEBISS_SCALE,
-                flags=pybullet.GEOM_FORCE_CONCAVE_TRIMESH,
-            )
-            self._gebiss = pybullet.createMultiBody(
-                baseVisualShapeIndex=gebiss_vis2,
-                baseCollisionShapeIndex=gebiss_col2,
-                basePosition=GEBISS_POSITION,
-                baseOrientation=pybullet.getQuaternionFromEuler(GEBISS_EULER),
-            )
-            pybullet.setRealTimeSimulation(1)
-            print(f"  ⛔ Kollision mit Scanner – jaw abgebrochen")
-            return False
-        pybullet.setRealTimeSimulation(1)
-        self._current_jaw_folder = folder
-        self._current_jaw_type = jaw_type
-        return True
-
-    def unload_jaw(self):
-        pybullet.setRealTimeSimulation(0)
-        if self._gebiss is not None:
-            pybullet.removeBody(self._gebiss)
-            self._gebiss = None
+    def load_jaw(self, folder, jaw_type="lower", position=None, euler=None):
+        if position is None or euler is None:
+            if self._jaw_pos is None or self._jaw_euler is None:
+                print("  ! Keine Gebissposition aktiv – zuerst 'start <name>'")
+                return False
+            position = self._jaw_pos
+            euler = self._jaw_euler
+        return self.load_jaw_at(folder, jaw_type, position, euler)
 
     def load_jaw_at(self, folder, jaw_type, position, euler):
         vis_path, col_path = self._resolve_jaw_paths(folder, jaw_type)
+        old_folder = self._current_jaw_folder
+        old_type = self._current_jaw_type
+        old_position = self._jaw_pos
+        old_euler = self._jaw_euler
+        old_body = self._gebiss
+        pybullet.setRealTimeSimulation(0)
+        if self._gebiss is not None:
+            pybullet.removeBody(self._gebiss)
         gebiss_vis = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=vis_path, meshScale=GEBISS_SCALE)
         gebiss_col = pybullet.createCollisionShape(
             pybullet.GEOM_MESH, fileName=col_path, meshScale=GEBISS_SCALE,
@@ -185,7 +157,42 @@ class UR5Sim():
         )
         self._current_jaw_folder = folder
         self._current_jaw_type = jaw_type
+        self._jaw_pos = position
+        self._jaw_euler = euler
+        if self._check_jaw_collision():
+            pybullet.removeBody(self._gebiss)
+            if old_body is None or old_position is None:
+                self._gebiss = old_body
+                pybullet.setRealTimeSimulation(1)
+                print(f"  ⛔ Kollision mit Scanner – jaw abgebrochen")
+                return False
+            vis_path2, col_path2 = self._resolve_jaw_paths(old_folder, old_type)
+            gebiss_vis2 = pybullet.createVisualShape(pybullet.GEOM_MESH, fileName=vis_path2, meshScale=GEBISS_SCALE)
+            gebiss_col2 = pybullet.createCollisionShape(
+                pybullet.GEOM_MESH, fileName=col_path2, meshScale=GEBISS_SCALE,
+                flags=pybullet.GEOM_FORCE_CONCAVE_TRIMESH,
+            )
+            self._gebiss = pybullet.createMultiBody(
+                baseVisualShapeIndex=gebiss_vis2,
+                baseCollisionShapeIndex=gebiss_col2,
+                basePosition=old_position,
+                baseOrientation=pybullet.getQuaternionFromEuler(old_euler),
+            )
+            self._current_jaw_folder = old_folder
+            self._current_jaw_type = old_type
+            self._jaw_pos = old_position
+            self._jaw_euler = old_euler
+            pybullet.setRealTimeSimulation(1)
+            print(f"  ⛔ Kollision mit Scanner – jaw abgebrochen")
+            return False
         pybullet.setRealTimeSimulation(1)
+        return True
+
+    def unload_jaw(self):
+        pybullet.setRealTimeSimulation(0)
+        if self._gebiss is not None:
+            pybullet.removeBody(self._gebiss)
+            self._gebiss = None
 
     def _check_jaw_collision(self):
         for i in range(-1, self.num_joints):

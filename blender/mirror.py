@@ -37,7 +37,6 @@ def build_scene():
     arm_obj.show_in_front = True
     rig.parent_meshes(arm_obj, meshes, data)
     rig.add_scanner_and_camera(arm_obj, meshes)
-    rig.add_lower_jaw()
     rig.setup_render()
     bpy.context.scene.frame_set(1)
     for area in bpy.context.screen.areas:
@@ -141,12 +140,20 @@ def poll():
         if "replace_jaw" in msg:
             folder = msg["replace_jaw"].get("folder", 1)
             jaw_type = msg["replace_jaw"].get("type", "lower")
+            pos = msg["replace_jaw"].get("pos")
+            euler = msg["replace_jaw"].get("euler")
 
-            def _do_replace_jaw(f=folder, t=jaw_type):
-                rig.replace_jaw(f, t)
-                send_to_host({"jaw_complete": True})
+            def _do_replace_jaw(f=folder, t=jaw_type, p=pos, e=euler):
+                ok = rig.replace_jaw(f, t, pos=p, euler_deg=e)
+                send_to_host({"jaw_complete": bool(ok)})
                 return None
             bpy.app.timers.register(_do_replace_jaw, first_interval=0)
+        if "jaw_unload" in msg:
+
+            def _do_remove_jaw():
+                rig.remove_jaw()
+                return None
+            bpy.app.timers.register(_do_remove_jaw, first_interval=0)
     return 0.05
 
 

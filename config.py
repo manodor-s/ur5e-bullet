@@ -7,8 +7,8 @@ JAWS_DIR = os.path.join(PKG_DIR, "data", "meshes_jaws")
 ROBOT_URDF_PATH = os.path.join(PKG_DIR, "src", "ur5e_bullet", "ur_e_description", "urdf", "ur5e.urdf")
 
 # ── Gebiss ──
-GEBISS_POSITION = [0.85, 0, 0.3]
-GEBISS_EULER_DEG = [0, 0, 90]
+# Position/Orientierung kommen NICHT aus globalen Konstanten, sondern aus den
+# Startpositionen (START_POSITIONS[<name>]["jaw_pos"] / ["jaw_euler_deg"]).
 GEBISS_SCALE = [0.001, 0.001, 0.001]
 GEBISS_COLL_CELL = 1.5
 GEBISS_ROUGHNESS = 0.8
@@ -89,12 +89,27 @@ JOINTS = [
 #   endgueltige tcp_pos angefahren wird – zur besseren Beeinflussung des IK.
 #   Achtung: approach != waypoints (letztere sind die '+/'-navigierbaren Punkte).
 START_POSITIONS = {
-    "aussen": {
-        "tcp_pos":  [0.6, 0, 0.3],
+    "aussen1": {
+        "tcp_pos":  [0.615, 0, 0.295],
         "tcp_ori_deg": [180, 90, 0],
         "approach": [
             {"tcp_pos": [0.85, 0, 0.38], "tcp_ori_deg": [0, 0, 0], "label": "1"},
-            {"tcp_pos": [0.6, 0, 0.3], "tcp_ori_deg": [0, 90, 0], "label": "1"},
+            {"tcp_pos": [0.615, 0, 0.295], "tcp_ori_deg": [0, 90, 0], "label": "1"},
+        ],
+        "jaw_pos":  [0.65, 0, 0.3],
+        "jaw_euler_deg": [0, 0, 90],
+        "jaw_folder": 1,
+        "jaw_type":  "lower",
+        "waypoints": [
+            {"tcp_pos": [0.90, -0.03, 0.29], "tcp_ori_deg": [0, 0, 90], "label": "1"},
+            {"tcp_pos": [0.88, -0.01, 0.29], "tcp_ori_deg": [0, 0, 90], "label": "2"},
+        ],
+    },
+    "aussen2": {
+        "tcp_pos":  [0.615, 0, 0.295],
+        "tcp_ori_deg": [0, -90, 0],
+        "approach": [
+            {"tcp_pos": [0.85, 0, 0.38], "tcp_ori_deg": [0, 0, 0], "label": "1"},
         ],
         "jaw_pos":  [0.65, 0, 0.3],
         "jaw_euler_deg": [0, 0, 90],

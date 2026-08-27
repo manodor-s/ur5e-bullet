@@ -31,7 +31,7 @@ SCRIPT_DIR = _script_dir()
 ROOT = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, ROOT)
 from config import (
-    GEBISS_POSITION, GEBISS_EULER_DEG, GEBISS_SCALE,
+    GEBISS_SCALE,
     GEBISS_ROUGHNESS, GEBISS_SPECULAR,
     CAMERA_ROLL_DEG, CAMERA_SENSOR_W_MM, CAMERA_SENSOR_H_MM,
     CAMERA_FOV_DEG, CAMERA_LENS_MM, CAMERA_NEAR_M, CAMERA_FAR_M, CAMERA_DISPLAY_M,
@@ -41,7 +41,6 @@ from config import (
 )
 
 CAMERA_ROLL = math.radians(CAMERA_ROLL_DEG)
-GEBISS_EULER = [math.radians(v) for v in GEBISS_EULER_DEG]
 CAMERA_SENSOR_W = CAMERA_SENSOR_W_MM
 CAMERA_SENSOR_H = CAMERA_SENSOR_H_MM
 CAMERA_FOV = math.radians(CAMERA_FOV_DEG)
@@ -282,16 +281,21 @@ def add_scanner_and_camera(arm_obj, meshes):
     print("  + ScannerLight -> scanner_stab (Position = Pybullet-TCP, Blick +Z-Welt)")
 
 
-def add_lower_jaw():
-    replace_jaw(1, "lower")
-
-
-def replace_jaw(folder=1, jaw_type="lower"):
+def remove_jaw():
     for name in ("gebiss_lower", "gebiss_upper"):
         old = bpy.data.objects.get(name)
         if old is not None:
             old.select_set(True)
             bpy.data.objects.remove(old)
+    print("  - gebiss entfernt")
+
+
+def replace_jaw(folder=1, jaw_type="lower", pos=None, euler_deg=None):
+    remove_jaw()
+
+    if pos is None or euler_deg is None:
+        print("  ! Keine Gebisspos/Orientierung uebergeben – Gebiss nicht platziert")
+        return False
 
     stl_path = os.path.join(ROOT, "data", "meshes_jaws", str(folder), f"{jaw_type}.stl")
     if not os.path.exists(stl_path):
@@ -309,8 +313,12 @@ def replace_jaw(folder=1, jaw_type="lower"):
     jaw.select_set(True)
     bpy.context.view_layer.objects.active = jaw
     bpy.ops.object.transform_apply(scale=True)
-    jaw.location = Vector((GEBISS_POSITION[0] * S, GEBISS_POSITION[1] * S, GEBISS_POSITION[2] * S))
-    jaw.rotation_euler = (GEBISS_EULER[0], GEBISS_EULER[1], GEBISS_EULER[2])
+    jaw.location = Vector((pos[0] * S, pos[1] * S, pos[2] * S))
+    jaw.rotation_euler = (
+        math.radians(euler_deg[0]),
+        math.radians(euler_deg[1]),
+        math.radians(euler_deg[2]),
+    )
 
     mat = bpy.data.materials.get("GebissMaterial")
     if mat is None:
@@ -359,9 +367,6 @@ def main():
 
     print("Fuege Scanner und Kamera hinzu...")
     add_scanner_and_camera(arm_obj, meshes)
-
-    print("Fuege Unterkiefer hinzu...")
-    add_lower_jaw()
 
     print("Render-Einstellungen...")
     setup_render()

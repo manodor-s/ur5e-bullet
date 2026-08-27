@@ -259,10 +259,16 @@ def demo_simulation():
             sim._mirror._render_done.wait(timeout=300)
             continue
         if cmd.action == "jaw":
+            if current_start is None:
+                print(f"  ? Keine Startposition aktiv – zuerst 'start <name>'")
+                continue
             folder = cmd.params["folder"]
             jaw_type = cmd.params["type"]
+            jcfg = START_POSITIONS[current_start]
+            jpos = jcfg["jaw_pos"]
+            jeuler = [math.radians(v) for v in jcfg["jaw_euler_deg"]]
             try:
-                ok = sim.load_jaw(folder, jaw_type)
+                ok = sim.load_jaw(folder, jaw_type, jpos, jeuler)
             except FileNotFoundError as e:
                 print(f"  ! {e}")
                 continue
@@ -271,7 +277,7 @@ def demo_simulation():
             print(f"  PyBullet: gebiss_{jaw_type} aus Ordner {folder}")
             if sim._mirror is not None:
                 sim._mirror._jaw_done.clear()
-                sim._mirror.send_message({"replace_jaw": {"folder": folder, "type": jaw_type}})
+                sim._mirror.send_message({"replace_jaw": {"folder": folder, "type": jaw_type, "pos": jpos, "euler": jcfg["jaw_euler_deg"]}})
                 sim._mirror._jaw_done.wait(timeout=10)
             tcp_items = draw_tcp()
             continue
@@ -281,6 +287,8 @@ def demo_simulation():
             tcp_ori = [math.radians(v) for v in cfg["tcp_ori_deg"]]
             print(f"  → jaw entfernt...")
             sim.unload_jaw()
+            if sim._mirror is not None:
+                sim._mirror.send_message({"jaw_unload": True})
 
             def _dump_pose(tag, pos, ori_deg):
                 q = pybullet.getQuaternionFromEuler(ori_deg)
@@ -318,6 +326,9 @@ def demo_simulation():
             jeuler = [math.radians(v) for v in cfg["jaw_euler_deg"]]
             sim.load_jaw_at(cfg["jaw_folder"], cfg["jaw_type"], jpos, jeuler)
             if sim._mirror is not None:
+                sim._mirror._jaw_done.clear()
+                sim._mirror.send_message({"replace_jaw": {"folder": cfg["jaw_folder"], "type": cfg["jaw_type"], "pos": jpos, "euler": cfg["jaw_euler_deg"]}})
+                sim._mirror._jaw_done.wait(timeout=10)
                 sim._mirror.send_current()
             print(f"  → jaw eingefuegt ({cfg['jaw_type']}, pos=({jpos[0]:.3f}, {jpos[1]:.3f}, {jpos[2]:.3f}))")
             current_start = name
