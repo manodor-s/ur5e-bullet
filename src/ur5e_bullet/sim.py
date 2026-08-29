@@ -330,21 +330,22 @@ class UR5Sim():
         print()
         _color_links(self)
 
-    def _probe_rrt(self, target_pos, target_ori):
+    def _probe_rrt(self, target_pos, target_ori, seed=None):
         start_tcp, _ = self.get_tcp_pose()
         original_joint_positions = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
         ee_target = self._tcp_to_ee(target_pos, target_ori)
         render_flag = pybullet.COV_ENABLE_RENDERING
         pybullet.configureDebugVisualizer(render_flag, 0)
 
-        target_configuration = self._conf_for(ee_target, seed=original_joint_positions)
+        ee_seed = seed if seed is not None else original_joint_positions
+        target_configuration = self._conf_for(ee_target, seed=ee_seed)
         if target_configuration is None or not self._collision_free(target_configuration):
             target_configuration = self._find_collision_free_conf(ee_target)
         if target_configuration is None:
             pybullet.configureDebugVisualizer(render_flag, 1)
             for j, v in zip(self._joint_ids, original_joint_positions):
                 pybullet.resetJointState(self.ur5, j, v)
-            return start_tcp, target_pos, 0.0, target_pos, None
+            return start_tcp, target_pos, 0.0, target_pos, None, None
 
         devnull_fd = os.open(os.devnull, os.O_WRONLY)
         saved_stderr_fd = os.dup(2)
@@ -371,17 +372,17 @@ class UR5Sim():
             for j, v in zip(self._joint_ids, original_joint_positions):
                 pybullet.resetJointState(self.ur5, j, v)
             pybullet.configureDebugVisualizer(render_flag, 1)
-            return target_pos, None, 0.0, target_pos, tcp_waypoints
+            return target_pos, None, 0.0, target_pos, tcp_waypoints, path
 
         for j, v in zip(self._joint_ids, original_joint_positions):
             pybullet.resetJointState(self.ur5, j, v)
         pybullet.configureDebugVisualizer(render_flag, 1)
-        return start_tcp, target_pos, 0.0, target_pos, None
+        return start_tcp, target_pos, 0.0, target_pos, None, None
 
-    def _probe_path(self, target_pos, target_ori):
+    def _probe_path(self, target_pos, target_ori, seed=None):
         if self._mirror is not None:
             self._mirror.send_current()
-        return self._probe_rrt(target_pos, target_ori)
+        return self._probe_rrt(target_pos, target_ori, seed=seed)
 
     def _joint_limits_ok(self, configuration):
         for idx, v in enumerate(configuration):
@@ -415,12 +416,29 @@ class UR5Sim():
             obs.append(self._gebiss)
         return obs
 
-    def move_to(self, tcp_pos, tcp_ori, obstacles=None, speed=1.0, seed=None):
+    def move_to(self, tcp_pos, tcp_ori, obstacles=None, speed=1.0, seed=None, path=None):
         if obstacles is None:
             obstacles = self._obstacles()
         ee_target = self._tcp_to_ee(tcp_pos, tcp_ori)
         render_flag = pybullet.COV_ENABLE_RENDERING
         pybullet.configureDebugVisualizer(render_flag, 0)
+
+        if path is not None:
+            def run_preplanned():
+                pybullet.configureDebugVisualizer(render_flag, 1)
+                self._execute(path, speed)
+                actual_tcp, actual_quat = self.get_tcp_pose()
+                actual_ori = pybullet.getEulerFromQuaternion(actual_quat)
+                deg = [math.degrees(a) for a in actual_ori]
+                error_mm = math.sqrt(sum((actual_tcp[i] - tcp_pos[i]) ** 2 for i in range(3)))
+                if error_mm > 0.005:
+                    print(f"[!] ({actual_tcp[0]:.3f}, {actual_tcp[1]:.3f}, {actual_tcp[2]:.3f})  rx={deg[0]:.0f} ry={deg[1]:.0f} rz={deg[2]:.0f}  ({error_mm*1000:.0f} mm daneben)")
+                else:
+                    print(f"[ok] ({actual_tcp[0]:.3f}, {actual_tcp[1]:.3f}, {actual_tcp[2]:.3f})  rx={deg[0]:.0f} ry={deg[1]:.0f} rz={deg[2]:.0f}  ({error_mm*1000:.0f} mm)")
+                self._save_last(tcp_pos, tcp_ori)
+                return True
+            return run_preplanned()
+
         current_joints = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
         ik_seed = seed if seed is not None else current_joints
         target_configuration = self._conf_for(ee_target, seed=ik_seed)

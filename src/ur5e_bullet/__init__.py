@@ -1,5 +1,6 @@
 import os
 import math
+import time
 import pybullet
 from collections import namedtuple
 
@@ -17,6 +18,7 @@ _cfg_mod = _ilu.module_from_spec(_cfg_spec)
 _cfg_spec.loader.exec_module(_cfg_mod)
 START_POSITIONS = _cfg_mod.START_POSITIONS
 BOOT_START = _cfg_mod.BOOT_START
+PREVIEW_PAUSE = _cfg_mod.PREVIEW_PAUSE
 
 
 def _draw_crosshair(pos, color, items, label=None):
@@ -131,7 +133,7 @@ def _draw_waypoints(wps, active_idx=None):
     line_color = [0.2, 0.8, 1.0, 0.4]
     for i, wp in enumerate(wps):
         pos = wp["tcp_pos"]
-        _draw_crosshair(pos, color, items, wp.get("name") or wp.get("label", str(i)))
+        _draw_crosshair(pos, color, items)
         if i > 0:
             items.append(pybullet.addUserDebugLine(wps[i-1]["tcp_pos"], pos, line_color, 1))
     if len(wps) > 1:
@@ -212,11 +214,29 @@ def demo_simulation():
             print(f"  ⚠ Kein RRT-Pfad zu ({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f})")
         return target_position, target_orientation
 
+    def plan_and_show(pos, ori, seed=None):
+        """Plant den RRT-Pfad (mit optionalem IK-Seed), zeichnet ihn kurz als
+        Linie (ohne Rückfrage) und gibt den Joint-Pfad zum Fahren zurueck."""
+        probe_result = sim._probe_path(pos, ori, seed=seed)
+        start_tcp, _, _, _, rrt_waypoints, path = probe_result
+        if rrt_waypoints:
+            draw_probe_preview(rrt_waypoints, start_tcp, pos, ori)
+            time.sleep(PREVIEW_PAUSE)
+        else:
+            print(f"  ⚠ Kein RRT-Pfad zu ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})")
+        clear_temps()
+        return path
+
+    items = []
+    waypoint_items = []
+    tcp_items = []
+
     if BOOT_START is not None:
         cfg = BOOT_START
         ori = [math.radians(v) for v in cfg["tcp_ori_deg"]]
         print("  Boot: fahre zur Startposition...")
-        ok = sim.move_to(cfg["tcp_pos"], ori, speed=0.5, seed=sim._null_space[3])
+        boot_path = plan_and_show(list(cfg["tcp_pos"]), ori, seed=sim._null_space[3])
+        ok = sim.move_to(cfg["tcp_pos"], ori, speed=0.5, seed=sim._null_space[3], path=boot_path)
         if ok:
             print(f"  Boot: Startposition erreicht (Gebiss nicht geladen)")
         else:
@@ -233,8 +253,6 @@ def demo_simulation():
     print("  Start:       'start <Aussen|Oben|Innen>' (Startposition anfahren)")
     print("  Waypoints:   '+'/'-' naechster/vorheriger Waypoint")
     print("────────────────────────────────────────────")
-    items = []
-    waypoint_items = []
     current_start = None
     waypoint_idx = 0
     current_speed = 0.5
@@ -322,14 +340,24 @@ def demo_simulation():
                 print(f"  → approach {lbl}...")
                 _dump_pose(f"approach{lbl}", a["tcp_pos"], a_ori)
                 a_seed = None if a.get("use_current_seed") else start_seed
-                moved = sim.move_to(a["tcp_pos"], a_ori, speed=current_speed, seed=a_seed)
+                a_path = plan_and_show(a["tcp_pos"], a_ori, seed=a_seed)
+                if a_path is None:
+                    print(f"  ⛔ Approach {lbl} nicht erreichbar – start abgebrochen")
+                    tcp_items = draw_tcp()
+                    continue
+                moved = sim.move_to(a["tcp_pos"], a_ori, speed=current_speed, seed=a_seed, path=a_path)
                 if not moved:
                     print(f"  ⛔ Approach {lbl} nicht erreichbar – start abgebrochen")
                     tcp_items = draw_tcp()
                     continue
             print(f"  → fahre zu {name}-Start...")
             _dump_pose(f"final", cfg["tcp_pos"], tcp_ori)
-            moved = sim.move_to(cfg["tcp_pos"], tcp_ori, speed=current_speed, seed=start_seed)
+            final_path = plan_and_show(cfg["tcp_pos"], tcp_ori, seed=start_seed)
+            if final_path is None:
+                print(f"  ⛔ {name}-Start nicht erreichbar – start abgebrochen")
+                tcp_items = draw_tcp()
+                continue
+            moved = sim.move_to(cfg["tcp_pos"], tcp_ori, speed=current_speed, seed=start_seed, path=final_path)
             if not moved:
                 print(f"  ⛔ {name}-Start nicht erreichbar – start abgebrochen")
                 tcp_items = draw_tcp()
@@ -369,11 +397,14 @@ def demo_simulation():
                 wp = wps[waypoint_idx]
                 lbl = wp.get("name") or wp.get("label", str(waypoint_idx + 1))
                 print(f"  → {current_start} {lbl} ({waypoint_idx+1}/{len(wps)})...")
-                clear_temps()
                 wp_ori = [math.radians(v) for v in wp["tcp_ori_deg"]]
-                moved = sim.move_to(wp["tcp_pos"], wp_ori, speed=current_speed)
-                if not moved:
+                wp_path = plan_and_show(wp["tcp_pos"], wp_ori)
+                if wp_path is None:
                     print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
+                else:
+                    moved = sim.move_to(wp["tcp_pos"], wp_ori, speed=current_speed, path=wp_path)
+                    if not moved:
+                        print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
                 waypoint_idx += 1
             tcp_items = draw_tcp()
             continue
@@ -395,11 +426,14 @@ def demo_simulation():
                 wp = wps[waypoint_idx]
                 lbl = wp.get("name") or wp.get("label", str(waypoint_idx + 1))
                 print(f"  → {current_start} {lbl} ({waypoint_idx+1}/{len(wps)}) zurueck...")
-                clear_temps()
                 wp_ori = [math.radians(v) for v in wp["tcp_ori_deg"]]
-                moved = sim.move_to(wp["tcp_pos"], wp_ori, speed=current_speed)
-                if not moved:
+                wp_path = plan_and_show(wp["tcp_pos"], wp_ori)
+                if wp_path is None:
                     print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
+                else:
+                    moved = sim.move_to(wp["tcp_pos"], wp_ori, speed=current_speed, path=wp_path)
+                    if not moved:
+                        print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
             tcp_items = draw_tcp()
             continue
 
@@ -424,7 +458,7 @@ def demo_simulation():
         os.dup2(saved_fds[0], 1), os.dup2(saved_fds[1], 2)
         os.close(devnull_fd)
 
-        start_tcp, _, _, _, rrt_waypoints = probe_result
+        start_tcp, _, _, _, rrt_waypoints, plan_path = probe_result
 
         target_pos, target_ori = draw_probe_preview(
             rrt_waypoints, start_tcp, target_position, target_orientation,
@@ -436,7 +470,7 @@ def demo_simulation():
             break
         ok = False
         if confirm in ("", "y", "yes"):
-            ok = sim.move_to(target_pos, target_ori, speed=current_speed)
+            ok = sim.move_to(target_pos, target_ori, speed=current_speed, path=plan_path)
 
         clear_temps()
         tcp_items = draw_tcp()

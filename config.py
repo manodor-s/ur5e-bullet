@@ -59,6 +59,10 @@ RRT_RESTARTS = 30
 RRT_SMOOTH = 30
 RRT_SEED = 0
 
+# Dauer (Sekunden), die der gezeichnete RRT-Pfad vor dem automatischen
+# Anfahren eines Punktes sichtbar bleibt (ohne Rückfrage; nur Optik).
+PREVIEW_PAUSE = 0.6
+
 # ── Blender Scale Factor ──
 S = 1
 
