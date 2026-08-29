@@ -430,7 +430,6 @@ def demo_simulation():
                     print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
                 waypoint_idx += 1
             tcp_items = draw_tcp()
-            draw_waypoints()
             continue
         if cmd.action == "waypoint_prev":
             if current_start is None:
@@ -458,7 +457,6 @@ def demo_simulation():
                 if not moved:
                     print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
             tcp_items = draw_tcp()
-            draw_waypoints()
             continue
 
         clear_temps()
