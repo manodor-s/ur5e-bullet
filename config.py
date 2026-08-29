@@ -135,8 +135,8 @@ START_POSITIONS = {
         "tcp_pos":  [0.615, 0, 0.295],
         "tcp_ori_deg": [180, 90, 0],
         "approach": [
-            {"tcp_pos": [0.85, 0, 0.38], "tcp_ori_deg": [0, 0, 0], "label": "1"},
-            {"tcp_pos": [0.615, 0, 0.295], "tcp_ori_deg": [0, 90, 0], "label": "1"},
+            {"tcp_pos": [0.85, 0, 0.38], "tcp_ori_deg": [0, 0, 0], "label": "1", "use_current_seed": False},
+            {"tcp_pos": [0.615, 0, 0.295], "tcp_ori_deg": [0, 90, 0], "label": "2", "use_current_seed": True},
         ],
         "jaw_pos":  [0.9, 0, 0.3],
         "jaw_euler_deg": [0, 0, 90],
@@ -150,7 +150,7 @@ START_POSITIONS = {
         "tcp_pos":  [0.615, 0, 0.295],
         "tcp_ori_deg": [0, -90, 0],
         "approach": [
-            {"tcp_pos": [0.85, 0, 0.38], "tcp_ori_deg": [0, 0, 0], "label": "1"},
+            {"tcp_pos": [0.85, 0, 0.38], "tcp_ori_deg": [0, 0, 0], "label": "1", "use_current_seed": False},
         ],
         "jaw_pos":  [0.65, 0, 0.3],
         "jaw_euler_deg": [0, 0, 90],

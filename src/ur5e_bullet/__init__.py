@@ -106,24 +106,22 @@ def _parse_command(tokens):
                 return Command("error", {})
         return Command("waypoint_prev", {"steps": n})
 
-    linear = True
-    idx = 0
-    if tokens[0] == "r":
-        linear = False
-        idx = 1
+    if tokens[0] != "m":
+        print(f"  ? '{' '.join(tokens)}' verstanden? (Move: 'm x y z [rx ry rz]')")
+        return Command("error", {})
     try:
-        parsed_values = [float(v) for v in tokens[idx:]]
+        parsed_values = [float(v) for v in tokens[1:]]
     except ValueError:
-        print(f"  ? '{' '.join(tokens)}' verstanden?")
+        print(f"  ? '{' '.join(tokens)}' verstanden? (Move: 'm x y z [rx ry rz]')")
         return Command("error", {})
     if len(parsed_values) < 3:
-        return Command("incomplete", {})
+        print(f"  ? '{' '.join(tokens)}' – Position 'x y z' fehlt")
+        return Command("error", {})
     target_position = parsed_values[:3]
     target_orientation = [math.radians(v) for v in parsed_values[3:6]] if len(parsed_values) >= 6 else [0, 0, 0]
     return Command("move", {
         "target_position": target_position,
         "target_orientation": target_orientation,
-        "linear": linear,
     })
 
 
@@ -203,69 +201,22 @@ def demo_simulation():
         tcp_items.extend(draw_tcp())
         draw_waypoints()
 
-    def draw_probe_preview(last_valid_position, collision_position, deviation_mm,
-                           rrt_waypoints, start_tcp, target_position, target_orientation,
-                           linear):
-        if collision_position is None and deviation_mm == 0.0:
-            if rrt_waypoints:
-                step = max(1, len(rrt_waypoints) // 20)
-                for i in range(0, len(rrt_waypoints)-step, step):
-                    items.append(pybullet.addUserDebugLine(
-                        rrt_waypoints[i], rrt_waypoints[i+step], [0, 1, 0], 1,
-                    ))
-            else:
+    def draw_probe_preview(rrt_waypoints, start_tcp, target_position, target_orientation):
+        if rrt_waypoints:
+            step = max(1, len(rrt_waypoints) // 20)
+            for i in range(0, len(rrt_waypoints)-step, step):
                 items.append(pybullet.addUserDebugLine(
-                    start_tcp, target_position, [0, 1, 0], 2,
+                    rrt_waypoints[i], rrt_waypoints[i+step], [0, 1, 0], 1,
                 ))
-            return target_position, target_orientation
-
-        if collision_position is None and deviation_mm > 0:
-            items.append(pybullet.addUserDebugLine(
-                start_tcp, last_valid_position, [0, 1, 0], 2,
-            ))
-            items.append(pybullet.addUserDebugLine(
-                last_valid_position, target_position, [1, 0, 0], 2,
-            ))
-            reachable_distance = math.sqrt(sum((last_valid_position[i]-start_tcp[i])**2 for i in range(3)))
-            if reachable_distance > 0.005:
-                target_distance = math.sqrt(sum((target_position[i]-start_tcp[i])**2 for i in range(3)))
-                slerp_fraction = reachable_distance / target_distance if target_distance > 0 else 0
-                _, current_orientation = sim.get_tcp_pose()
-                mid_orientation = pybullet.getQuaternionSlerp(
-                    current_orientation, pybullet.getQuaternionFromEuler(target_orientation), slerp_fraction,
-                )
-                print(f"  ⚠ {deviation_mm:.0f}mm Abweichung – fahre zu ({last_valid_position[0]:.3f}, {last_valid_position[1]:.3f}, {last_valid_position[2]:.3f})")
-                return last_valid_position, list(pybullet.getEulerFromQuaternion(mid_orientation))
-            else:
-                _draw_crosshair(target_position, [1, 0, 0], items)
-                print(f"  ⛔ Kein linearer Pfad zu ({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f})")
-                return target_position, target_orientation
-
-        items.append(pybullet.addUserDebugLine(
-            start_tcp, last_valid_position, [0, 1, 0], 2,
-        ))
-        items.append(pybullet.addUserDebugLine(
-            last_valid_position, target_position, [1, 0, 0], 2,
-        ))
-        _draw_crosshair(last_valid_position, [1, 0, 0], items)
-        if not linear:
-            print(f"  ⛔ Kein RRT-Pfad zu ({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f})")
         else:
-            err = sim._last_linear_error
-            if err and err[0] == "limit":
-                names = ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3"]
-                print(f"  ⛔ {names[err[2]]} am Limit")
-            else:
-                print(f"  ⛔ Kollision bei ({collision_position[0]:.3f}, {collision_position[1]:.3f}, {collision_position[2]:.3f})")
+            print(f"  ⚠ Kein RRT-Pfad zu ({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f})")
         return target_position, target_orientation
 
     if BOOT_START is not None:
         cfg = BOOT_START
         ori = [math.radians(v) for v in cfg["tcp_ori_deg"]]
         print("  Boot: fahre zur Startposition...")
-        ok = sim.move_to(cfg["tcp_pos"], ori, linear=True, speed=0.5)
-        if not ok:
-            ok = sim.move_to(cfg["tcp_pos"], ori, linear=False, speed=0.5)
+        ok = sim.move_to(cfg["tcp_pos"], ori, speed=0.5, seed=sim._null_space[3])
         if ok:
             print(f"  Boot: Startposition erreicht (Gebiss nicht geladen)")
         else:
@@ -273,9 +224,8 @@ def demo_simulation():
         tcp_items = draw_tcp()
 
     print("── UR5e Demo ──────────────────────────────")
-    print("Format: x y z rx ry rz oder 'q' zum Beenden")
+    print("Move:        'm x y z [rx ry rz]' (RRT, Default-Orientierung 0 0 0)")
     print("  Tool-Offset: 'o x y z' (z. B. o 0 0 0.15)")
-    print("  RRT-Modus:   'r x y z rx ry rz'")
     print("  Geschw.:     's 0.5' (global, Default 0.5)")
     print("  Reset:       '@'  (nach manuellem Ziehen)")
     print("  Render:      'render' (Cycles-Render in Blender)")
@@ -365,23 +315,21 @@ def demo_simulation():
                 print(f"    [dbg {tag}] joints_deg={jstr}")
 
             approach = cfg.get("approach", [])
+            start_seed = sim._null_space[3]
             for i, a in enumerate(approach):
                 a_ori = [math.radians(v) for v in a["tcp_ori_deg"]]
                 lbl = a.get("label", str(i + 1))
                 print(f"  → approach {lbl}...")
                 _dump_pose(f"approach{lbl}", a["tcp_pos"], a_ori)
-                moved = sim.move_to(a["tcp_pos"], a_ori, linear=True, speed=current_speed)
-                if not moved:
-                    moved = sim.move_to(a["tcp_pos"], a_ori, linear=False, speed=current_speed)
+                a_seed = None if a.get("use_current_seed") else start_seed
+                moved = sim.move_to(a["tcp_pos"], a_ori, speed=current_speed, seed=a_seed)
                 if not moved:
                     print(f"  ⛔ Approach {lbl} nicht erreichbar – start abgebrochen")
                     tcp_items = draw_tcp()
                     continue
             print(f"  → fahre zu {name}-Start...")
             _dump_pose(f"final", cfg["tcp_pos"], tcp_ori)
-            moved = sim.move_to(cfg["tcp_pos"], tcp_ori, linear=True, speed=current_speed)
-            if not moved:
-                moved = sim.move_to(cfg["tcp_pos"], tcp_ori, linear=False, speed=current_speed)
+            moved = sim.move_to(cfg["tcp_pos"], tcp_ori, speed=current_speed, seed=start_seed)
             if not moved:
                 print(f"  ⛔ {name}-Start nicht erreichbar – start abgebrochen")
                 tcp_items = draw_tcp()
@@ -423,9 +371,7 @@ def demo_simulation():
                 print(f"  → {current_start} {lbl} ({waypoint_idx+1}/{len(wps)})...")
                 clear_temps()
                 wp_ori = [math.radians(v) for v in wp["tcp_ori_deg"]]
-                moved = sim.move_to(wp["tcp_pos"], wp_ori, linear=True, speed=current_speed)
-                if not moved:
-                    moved = sim.move_to(wp["tcp_pos"], wp_ori, linear=False, speed=current_speed)
+                moved = sim.move_to(wp["tcp_pos"], wp_ori, speed=current_speed)
                 if not moved:
                     print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
                 waypoint_idx += 1
@@ -451,9 +397,7 @@ def demo_simulation():
                 print(f"  → {current_start} {lbl} ({waypoint_idx+1}/{len(wps)}) zurueck...")
                 clear_temps()
                 wp_ori = [math.radians(v) for v in wp["tcp_ori_deg"]]
-                moved = sim.move_to(wp["tcp_pos"], wp_ori, linear=True, speed=current_speed)
-                if not moved:
-                    moved = sim.move_to(wp["tcp_pos"], wp_ori, linear=False, speed=current_speed)
+                moved = sim.move_to(wp["tcp_pos"], wp_ori, speed=current_speed)
                 if not moved:
                     print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
             tcp_items = draw_tcp()
@@ -463,18 +407,8 @@ def demo_simulation():
 
         if cmd.action == "error":
             continue
-        if cmd.action == "incomplete":
-            tcp_items = draw_tcp()
-            if sim._last_target:
-                tcp_pos, _ = sim.get_tcp_pose()
-                displacement_mm = math.sqrt(sum((tcp_pos[i]-sim._last_target[0][i])**2 for i in range(3)))
-                if displacement_mm > 0.01:
-                    print(f"  ⚠ {displacement_mm*1000:.0f}mm manuell verschoben (@ zum Reset)")
-            continue
-
         target_position = cmd.params["target_position"]
         target_orientation = cmd.params["target_orientation"]
-        linear = cmd.params["linear"]
 
         tcp_pos, _ = sim.get_tcp_pose()
 
@@ -485,54 +419,25 @@ def demo_simulation():
         _draw_crosshair(target_position, [1, 1, 0], items,
                         f"({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f})")
 
-        sim._last_collision_tcp_pose = None
-        sim._last_collision_conf = None
-        sim._remove_ghost()
-
-        probe_result = sim._probe_path(target_position, target_orientation, rrt=not linear)
+        probe_result = sim._probe_path(target_position, target_orientation)
 
         os.dup2(saved_fds[0], 1), os.dup2(saved_fds[1], 2)
         os.close(devnull_fd)
 
-        last_valid_position, collision_position, deviation_mm, actual_endpoint, rrt_waypoints = probe_result
+        start_tcp, _, _, _, rrt_waypoints = probe_result
 
         target_pos, target_ori = draw_probe_preview(
-            last_valid_position, collision_position, deviation_mm,
-            rrt_waypoints, tcp_pos, target_position, target_orientation,
-            linear,
+            rrt_waypoints, start_tcp, target_position, target_orientation,
         )
 
-        if collision_position is not None:
-            reachable_distance = math.sqrt(sum((last_valid_position[i]-tcp_pos[i])**2 for i in range(3)))
-            target_distance = math.sqrt(sum((target_position[i]-tcp_pos[i])**2 for i in range(3)))
-            if reachable_distance > 0.005 and target_distance > 0:
-                sim._show_ghost()
-                fraction = reachable_distance / target_distance
-                _, current_orientation = sim.get_tcp_pose()
-                mid_orientation = pybullet.getQuaternionSlerp(
-                    current_orientation, pybullet.getQuaternionFromEuler(target_orientation), fraction,
-                )
-                try:
-                    confirm = input("  Zum Ghost-Punkt bewegen? [Y/n] ").strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    break
-                if confirm in ("", "y", "yes"):
-                    ok = sim.move_to(last_valid_position, list(pybullet.getEulerFromQuaternion(mid_orientation)), linear=linear, speed=current_speed, target_conf=sim._last_collision_conf)
-                else:
-                    ok = False
-            else:
-                print("  Ziel von aktueller Position aus unerreichbar (kein gültiger Zwischenpunkt)")
-                ok = False
-        else:
-            try:
-                confirm = input("  Ausführen? [Y/n] ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                break
-            ok = False
-            if confirm in ("", "y", "yes"):
-                ok = sim.move_to(target_pos, target_ori, linear=linear, speed=current_speed)
+        try:
+            confirm = input("  Ausführen? [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            break
+        ok = False
+        if confirm in ("", "y", "yes"):
+            ok = sim.move_to(target_pos, target_ori, speed=current_speed)
 
-        sim._remove_ghost()
         clear_temps()
         tcp_items = draw_tcp()
 

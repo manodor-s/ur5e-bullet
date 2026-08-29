@@ -34,7 +34,6 @@ IK_TOLERANCE = _cfg_mod.IK_TOLERANCE
 RRT_RESTARTS = _cfg_mod.RRT_RESTARTS
 RRT_SMOOTH = _cfg_mod.RRT_SMOOTH
 RRT_SEED = _cfg_mod.RRT_SEED
-GHOST_COLOR = _cfg_mod.GHOST_COLOR
 JOINT_LOWER_LIMITS = [math.radians(j["lower_deg"]) for j in _cfg_mod.JOINTS]
 JOINT_UPPER_LIMITS = [math.radians(j["upper_deg"]) for j in _cfg_mod.JOINTS]
 JOINT_REST_POSES = [math.radians(j["rest_deg"]) for j in _cfg_mod.JOINTS]
@@ -89,10 +88,6 @@ class UR5Sim():
         self.tool_offset_orn = list(TOOL_OFFSET_ORN)
         self._last_conf = None
         self._last_target = None
-        self._last_collision_tcp_pose = None
-        self._last_collision_conf = None
-        self._ghost_body = None
-        self._last_linear_error = None
         if mirror is None:
             mirror = gui
         self._mirror = BlenderMirror(self) if mirror else None
@@ -333,63 +328,6 @@ class UR5Sim():
         print()
         _color_links(self)
 
-    def _linear_segment(self, ee_start, ee_end):
-        self._last_linear_error = None
-        steps = 100
-        path = []
-        initial_state = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-        for i in range(1, steps + 1):
-            t = i / steps
-            pos = [
-                ee_start[0][j] + t * (ee_end[0][j] - ee_start[0][j])
-                for j in range(3)
-            ]
-            quat = pybullet.getQuaternionSlerp(ee_start[1], ee_end[1], t)
-            prev = path[-1] if path else initial_state
-            for j, v in zip(self._joint_ids, prev):
-                pybullet.resetJointState(self.ur5, j, v)
-            conf = self._ik((pos, quat), seed=prev)
-            if conf is None:
-                self._last_linear_error = ("ik", i)
-                for j, v in zip(self._joint_ids, initial_state):
-                    pybullet.resetJointState(self.ur5, j, v)
-                return None
-            if not self._joint_limits_ok(conf):
-                self._last_collision_tcp_pose = (pos, quat)
-                self._last_collision_conf = conf
-                for idx, v in enumerate(conf):
-                    if not (self._null_space[0][idx] <= v <= self._null_space[1][idx]):
-                        self._last_linear_error = ("limit", i, idx)
-                        break
-                for j, v in zip(self._joint_ids, initial_state):
-                    pybullet.resetJointState(self.ur5, j, v)
-                return None
-            if not self._collision_free(conf):
-                self._last_collision_tcp_pose = (pos, quat)
-                self._last_collision_conf = conf
-                self._last_linear_error = ("collision", i)
-                for j, v in zip(self._joint_ids, initial_state):
-                    pybullet.resetJointState(self.ur5, j, v)
-                return None
-            saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-            for j, v in zip(self._joint_ids, conf):
-                pybullet.resetJointState(self.ur5, j, v)
-            ls = pybullet.getLinkState(self.ur5, self.end_effector_index, computeForwardKinematics=True)
-            fk_err = math.sqrt(sum((ls[0][j] - pos[j])**2 for j in range(3)))
-            for j, v in zip(self._joint_ids, saved):
-                pybullet.resetJointState(self.ur5, j, v)
-            if fk_err > 0.002:
-                self._last_collision_tcp_pose = (pos, quat)
-                self._last_collision_conf = path[-1] if path else initial_state
-                self._last_linear_error = ("fk", i)
-                for j, v in zip(self._joint_ids, initial_state):
-                    pybullet.resetJointState(self.ur5, j, v)
-                return None
-            path.append(conf)
-        for j, v in zip(self._joint_ids, initial_state):
-            pybullet.resetJointState(self.ur5, j, v)
-        return path
-
     def _probe_rrt(self, target_pos, target_ori):
         start_tcp, _ = self.get_tcp_pose()
         original_joint_positions = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
@@ -400,23 +338,6 @@ class UR5Sim():
         target_configuration = self._conf_for(ee_target, seed=original_joint_positions)
         if target_configuration is None or not self._collision_free(target_configuration):
             target_configuration = self._find_collision_free_conf(ee_target)
-        if target_configuration is None:
-            ee_start = pybullet.getLinkState(
-                self.ur5, self.end_effector_index,
-                computeForwardKinematics=True,
-            )[:2]
-            path = self._linear_segment(ee_start, ee_target)
-            if path is not None:
-                target_configuration = path[-1]
-            else:
-                saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-                for j, v in zip(self._joint_ids, self._null_space[3]):
-                    pybullet.resetJointState(self.ur5, j, v)
-                path = self._linear_segment(ee_start, ee_target)
-                for j, v in zip(self._joint_ids, saved):
-                    pybullet.resetJointState(self.ur5, j, v)
-                if path is not None:
-                    target_configuration = path[-1]
         if target_configuration is None:
             pybullet.configureDebugVisualizer(render_flag, 1)
             for j, v in zip(self._joint_ids, original_joint_positions):
@@ -455,129 +376,10 @@ class UR5Sim():
         pybullet.configureDebugVisualizer(render_flag, 1)
         return start_tcp, target_pos, 0.0, target_pos, None
 
-    def _eval_linear_path(self, path, start_tcp, target_pos):
-        num_steps = len(path)
-        original_joint_positions = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-        last_good_fraction = 0.0
-
-        for i, configuration in enumerate(path):
-            fraction = (i + 1) / num_steps
-            target_tcp_at_t = [
-                start_tcp[j] + fraction * (target_pos[j] - start_tcp[j])
-                for j in range(3)
-            ]
-            for j, v in zip(self._joint_ids, configuration):
-                pybullet.resetJointState(self.ur5, j, v)
-            actual_tcp, _ = self.get_tcp_pose()
-            deviation_mm = math.sqrt(sum((actual_tcp[j]-target_tcp_at_t[j])**2 for j in range(3))) * 1000
-            if deviation_mm <= 5:
-                last_good_fraction = fraction
-
-        last_good_position = [
-            start_tcp[j] + last_good_fraction * (target_pos[j] - start_tcp[j])
-            for j in range(3)
-        ]
-        configuration = path[-1]
-        for j, v in zip(self._joint_ids, configuration):
-            pybullet.resetJointState(self.ur5, j, v)
-        actual_endpoint, _ = self.get_tcp_pose()
-        end_deviation_mm = math.sqrt(sum((actual_endpoint[j]-target_pos[j])**2 for j in range(3))) * 1000
-
-        for j, v in zip(self._joint_ids, original_joint_positions):
-            pybullet.resetJointState(self.ur5, j, v)
-
-        if last_good_fraction >= 1.0 and end_deviation_mm <= 5:
-            return target_pos, None, 0.0, actual_endpoint, None
-        return last_good_position, None, end_deviation_mm, actual_endpoint, None
-
-    def _probe_linear_stepwise(self, target_pos, target_ori, start_tcp):
-        num_steps = 100
-        fk_tol = 0.0005
-        seed_configuration = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-        last_good_conf = list(seed_configuration)
-        last_good_fraction = 0.0
-        failed = False
-        _, q_start_tcp = self.get_tcp_pose()
-        q_target_tcp = pybullet.getQuaternionFromEuler(target_ori)
-
-        for i in range(1, num_steps + 1):
-            fraction = i / num_steps
-            target_tcp_at_t = [
-                start_tcp[j] + fraction * (target_pos[j] - start_tcp[j])
-                for j in range(3)
-            ]
-            interpolated_tcp_orientation = pybullet.getQuaternionSlerp(q_start_tcp, q_target_tcp, fraction)
-            ee_at_t = self._tcp_to_ee(
-                target_tcp_at_t,
-                list(pybullet.getEulerFromQuaternion(interpolated_tcp_orientation)),
-            )
-            configuration = self._ik(ee_at_t, seed=seed_configuration)
-            if configuration is None:
-                self._last_collision_conf = last_good_conf
-                failed = True
-                break
-            if not self._collision_free(configuration):
-                self._last_collision_conf = last_good_conf
-                failed = True
-                break
-            saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-            for j, v in zip(self._joint_ids, configuration):
-                pybullet.resetJointState(self.ur5, j, v)
-            ls = pybullet.getLinkState(self.ur5, self.end_effector_index, computeForwardKinematics=True)
-            fk_err = math.sqrt(sum((ls[0][j] - ee_at_t[0][j])**2 for j in range(3)))
-            for j, v in zip(self._joint_ids, saved):
-                pybullet.resetJointState(self.ur5, j, v)
-            if fk_err > fk_tol:
-                self._last_collision_conf = last_good_conf
-                failed = True
-                break
-            seed_configuration = configuration
-            last_good_conf = list(configuration)
-            last_good_fraction = fraction
-
-        last_valid_position = [
-            start_tcp[j] + last_good_fraction * (target_pos[j] - start_tcp[j])
-            for j in range(3)
-        ]
-        if failed:
-            last_valid_orientation = pybullet.getQuaternionSlerp(
-                q_start_tcp, q_target_tcp, last_good_fraction)
-            last_valid_ee = self._tcp_to_ee(
-                last_valid_position,
-                list(pybullet.getEulerFromQuaternion(last_valid_orientation)),
-            )
-            self._last_collision_tcp_pose = (last_valid_ee[0], last_valid_ee[1])
-            return last_valid_position, target_tcp_at_t, 0.0, last_valid_position, None
-        return last_valid_position, None, 0.0, last_valid_position, None
-
-    def _probe_linear(self, target_pos, target_ori):
-        ee_target = self._tcp_to_ee(target_pos, target_ori)
-        ee_start = pybullet.getLinkState(
-            self.ur5, self.end_effector_index,
-            computeForwardKinematics=True,
-        )[:2]
-        start_tcp, _ = self.get_tcp_pose()
-        render_flag = pybullet.COV_ENABLE_RENDERING
-        pybullet.configureDebugVisualizer(render_flag, 0)
-
-        path = self._linear_segment(ee_start, ee_target)
-        if path is not None:
-            result = self._eval_linear_path(path, start_tcp, target_pos)
-            pybullet.configureDebugVisualizer(render_flag, 1)
-            return result
-
-        result = self._probe_linear_stepwise(target_pos, target_ori, start_tcp)
-        pybullet.configureDebugVisualizer(render_flag, 1)
-        return result
-
-    def _probe_path(self, target_pos, target_ori, rrt=False):
-        self._last_linear_error = None
-        self._last_collision_conf = None
+    def _probe_path(self, target_pos, target_ori):
         if self._mirror is not None:
             self._mirror.send_current()
-        if rrt:
-            return self._probe_rrt(target_pos, target_ori)
-        return self._probe_linear(target_pos, target_ori)
+        return self._probe_rrt(target_pos, target_ori)
 
     def _joint_limits_ok(self, configuration):
         for idx, v in enumerate(configuration):
@@ -611,83 +413,15 @@ class UR5Sim():
             obs.append(self._gebiss)
         return obs
 
-    def _remove_ghost(self):
-        if self._ghost_body is not None:
-            pybullet.removeBody(self._ghost_body)
-            self._ghost_body = None
-
-    def _show_ghost(self):
-        if self._last_collision_tcp_pose is None:
-            return
-        self._remove_ghost()
-        conf = self._last_collision_conf
-        if conf is None:
-            return
-        devnull_fd = os.open(os.devnull, os.O_WRONLY)
-        saved_stdout_fd = os.dup(1)
-        saved_stderr_fd = os.dup(2)
-        os.dup2(devnull_fd, 1)
-        os.dup2(devnull_fd, 2)
-        ghost = pybullet.loadURDF(
-            ROBOT_URDF_PATH, [0, 100, 0], [0, 0, 0, 1],
-            flags=pybullet.URDF_USE_SELF_COLLISION,
-            useFixedBase=True,
-        )
-        os.dup2(saved_stdout_fd, 1)
-        os.dup2(saved_stderr_fd, 2)
-        os.close(devnull_fd)
-        for i in range(-1, pybullet.getNumJoints(ghost)):
-            pybullet.changeDynamics(ghost, i, mass=0)
-            pybullet.changeVisualShape(ghost, i, rgbaColor=GHOST_COLOR)
-        for i, v in zip(self._joint_ids, conf):
-            pybullet.resetJointState(ghost, i, v)
-        pybullet.resetBasePositionAndOrientation(ghost, [0, 0, 0], [0, 0, 0, 1])
-        actual_ee = pybullet.getLinkState(ghost, self.end_effector_index, computeForwardKinematics=True)
-        target_pos = self._last_collision_tcp_pose[0]
-        error = [target_pos[i] - actual_ee[0][i] for i in range(3)]
-        pybullet.resetBasePositionAndOrientation(ghost, error, [0, 0, 0, 1])
-        pybullet.setCollisionFilterGroupMask(ghost, -1, 0, 0)
-        for i in range(pybullet.getNumJoints(ghost)):
-            pybullet.setCollisionFilterGroupMask(ghost, i, 0, 0)
-        self._ghost_body = ghost
-
-    def _via_point(self, start_pos, target_pos, lift=0.1):
-        z = max(start_pos[2], target_pos[2]) + lift
-        return [(start_pos[0], start_pos[1], z),
-                (target_pos[0], target_pos[1], z)]
-
-    def _find_path(self, ee_start, ee_target):
-        """Direct linear path (2 seed variants) → None."""
-        render_flag = pybullet.COV_ENABLE_RENDERING
-        pybullet.configureDebugVisualizer(render_flag, 0)
-        path = self._linear_segment(ee_start, ee_target)
-        if path is not None:
-            pybullet.configureDebugVisualizer(render_flag, 1)
-            return path
-        err1 = self._last_linear_error
-        saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-        for j, v in zip(self._joint_ids, self._null_space[3]):
-            pybullet.resetJointState(self.ur5, j, v)
-        path = self._linear_segment(ee_start, ee_target)
-        for j, v in zip(self._joint_ids, saved):
-            pybullet.resetJointState(self.ur5, j, v)
-        pybullet.configureDebugVisualizer(render_flag, 1)
-        if path is None and err1 and err1[0] == "limit":
-            matches = [e for e in [err1, self._last_linear_error] if e[0] == "limit"]
-            self._last_linear_error = matches[0] if matches else err1
-        return path
-
-    def move_to(self, tcp_pos, tcp_ori, linear=True, obstacles=None, tol=0.08, speed=1.0, target_conf=None):
+    def move_to(self, tcp_pos, tcp_ori, obstacles=None, speed=1.0, seed=None):
         if obstacles is None:
             obstacles = self._obstacles()
         ee_target = self._tcp_to_ee(tcp_pos, tcp_ori)
         render_flag = pybullet.COV_ENABLE_RENDERING
         pybullet.configureDebugVisualizer(render_flag, 0)
         current_joints = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-        if target_conf is not None:
-            target_configuration = target_conf
-        else:
-            target_configuration = self._conf_for(ee_target, seed=current_joints)
+        ik_seed = seed if seed is not None else current_joints
+        target_configuration = self._conf_for(ee_target, seed=ik_seed)
         if target_configuration is None:
             pybullet.configureDebugVisualizer(render_flag, 1)
             print(f"[nein] Ziel {tcp_pos} nicht erreichbar")
@@ -707,44 +441,8 @@ class UR5Sim():
             self._save_last(tcp_pos, tcp_ori)
             return True
 
-        if linear:
-            ee_start = pybullet.getLinkState(
-                self.ur5, self.end_effector_index,
-                computeForwardKinematics=True,
-            )[:2]
-            path = self._find_path(ee_start, ee_target)
-            if path is not None:
-                return run(path)
-
-            err = self._last_linear_error
-            if err and err[0] == "limit":
-                names = ["shoulder_pan", "shoulder_lift", "elbow",
-                         "wrist_1", "wrist_2", "wrist_3"]
-                print(f"[nein] {names[err[2]]} am Limit – kein Pfad zu {tcp_pos}")
-            else:
-                print(f"[nein] Kein Pfad zu {tcp_pos}")
-            pybullet.configureDebugVisualizer(render_flag, 1)
-            return False
-
         if not self._collision_free(target_configuration):
             target_configuration = self._find_collision_free_conf(ee_target)
-            if target_configuration is None:
-                ee_start = pybullet.getLinkState(
-                    self.ur5, self.end_effector_index,
-                    computeForwardKinematics=True,
-                )[:2]
-                path = self._linear_segment(ee_start, ee_target)
-                if path is not None:
-                    target_configuration = path[-1]
-                else:
-                    saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
-                    for j, v in zip(self._joint_ids, self._null_space[3]):
-                        pybullet.resetJointState(self.ur5, j, v)
-                    path = self._linear_segment(ee_start, ee_target)
-                    for j, v in zip(self._joint_ids, saved):
-                        pybullet.resetJointState(self.ur5, j, v)
-                    if path is not None:
-                        target_configuration = path[-1]
         if target_configuration is None:
             pybullet.configureDebugVisualizer(render_flag, 1)
             print(f"[nein] Ziel {tcp_pos} kollidiert")
@@ -762,8 +460,6 @@ class UR5Sim():
             return False
         extend_fn = get_extend_fn(self.ur5, self._joint_ids)
         path = list(refine_waypoints(path, extend_fn))
-        if target_conf is not None:
-            path[-1] = list(target_conf)
         return run(path)
 
     def _save_last(self, tcp_pos, tcp_ori):
