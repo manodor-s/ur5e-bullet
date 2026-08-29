@@ -213,13 +213,15 @@ class UR5Sim():
     def _ik(self, ee_pose, seed=None, max_iter=10, tol=1e-6):
         target_pos, target_quat = ee_pose
         rest = seed if seed is not None else self._null_space[3]
+        saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
+        for i, v in zip(self._joint_ids, rest):
+            pybullet.resetJointState(self.ur5, i, v)
         conf = list(pybullet.calculateInverseKinematics(
             self.ur5, self.end_effector_index, target_pos, target_quat,
             lowerLimits=self._null_space[0], upperLimits=self._null_space[1],
             jointRanges=self._null_space[2], restPoses=rest,
             solver=pybullet.IK_DLS,
         ))
-        saved = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
         for i, v in zip(self._joint_ids, conf):
             pybullet.resetJointState(self.ur5, i, v)
 
