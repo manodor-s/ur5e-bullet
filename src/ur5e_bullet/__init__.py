@@ -20,6 +20,7 @@ START_POSITIONS = _cfg_mod.START_POSITIONS
 BOOT_START = _cfg_mod.BOOT_START
 PREVIEW_PAUSE = _cfg_mod.PREVIEW_PAUSE
 WAYPOINT_MARKER_RADIUS = _cfg_mod.WAYPOINT_MARKER_RADIUS
+ENABLE_BLENDER_SYNC = _cfg_mod.ENABLE_BLENDER_SYNC
 
 
 def _draw_crosshair(pos, color, items, label=None):
@@ -165,7 +166,7 @@ def _resolve_waypoints(cfg):
 
 
 def demo_simulation():
-    sim = UR5Sim()
+    sim = UR5Sim(mirror=ENABLE_BLENDER_SYNC)
 
     def draw_tcp():
         pos, _ = sim.get_tcp_pose()

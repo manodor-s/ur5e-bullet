@@ -1,6 +1,8 @@
 import math
 import os
 
+import pybullet as pb
+
 # ── Pfade ──
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 JAWS_DIR = os.path.join(PKG_DIR, "data", "meshes_jaws")
@@ -30,11 +32,11 @@ CAMERA_SENSOR_H_MM = CAMERA_SENSOR_W_MM * 9 / 16
 CAMERA_FOV_DEG = 87
 CAMERA_LENS_MM = CAMERA_SENSOR_W_MM / (2 * math.tan(math.radians(CAMERA_FOV_DEG) / 2))
 CAMERA_NEAR_M = 0.001
-CAMERA_FAR_M = 1.0
+CAMERA_FAR_M = 0.015
 CAMERA_DISPLAY_M = 0.2
 
 # ── Licht ──
-LIGHT_POWER = 0.0005
+LIGHT_POWER = 0.001
 LIGHT_OFFSET = [0.008, 0.025, 0.213]
 
 # ── Render ──
@@ -48,6 +50,11 @@ RENDER_TRANSPARENT = False
 TOOL_OFFSET_POS = [0.213, 0, -0.006]
 TOOL_OFFSET_ORN = [0, 0, 0, 1]
 CAMERA_OFFSET = [0.008, 0, 0.213]
+
+# ── Blender-Sync ──
+# Legt fest, ob beim Start der Blender-Sync-Mirror mitgestartet wird
+# (pusht den Roboterzustand per TCP-Socket an eine Blender-GUI-Instanz).
+ENABLE_BLENDER_SYNC = True
 
 # ── Socket ──
 SOCKET_HOST = "127.0.0.1"
@@ -98,12 +105,39 @@ JOINTS = [
 # Position (Parabel):   x = x0 + a*value^2,  y = value,  z = z
 #   value-laeuft kleinteilig von -y_max .. +y_max (verteilt auf n Punkte).
 #
-# Orientierung (3 Achsen getrennt anpassbar):
-#   rot[k] = ori0[k] + ori_scale[k] * frac
-#   - ori0    : Startwinkel je Achse (Grad); Fallback: cfg['tcp_ori_deg']
-#   - ori_scale: Grad-Spanne je Achse (Rx, Ry, Rz) ueber den kompletten Pfad
-#   - frac    : Verlauf 0..1 je Punkt (Default idx/(n-1); Punkt 5 von 10 -> 0.5)
-#   Beim Aufruf sind 'idx' (0..n-1) und 'n' verfuegbar.
+# Orientierung: smoother Uebergang (Quaternion-Slerp) zwischen drei Ankern.
+#   ori_anchors = {"start": <euler>, "mid": <euler>, "end": <euler>}
+#   - start : Orientierung am ersten Waypoint (W0)
+#   - mid   : Orientierung am mittigen Waypoint (n muss UNGERADE sein, damit
+#             der mittige Exakt mittig liegt); mittiger Index = n//2
+#   - end   : Orientierung am letzten Waypoint (W{n-1})
+#   Alle Winkel in Grad. Zwischenpunkte werden stueckweise sph aerisch
+#   linear interpoliert (slerp), dadurch werden Achsenspruenge/Mehrdeutigkeiten
+#   der Euler-Darstellung vermieden.
+def _quat_normalize(q):
+    import math as _m
+    n = _m.sqrt(sum(c * c for c in q))
+    return [c / n for c in q] if n > 0 else [1.0, 0.0, 0.0, 0.0]
+
+
+def _quat_slerp(a, b, t):
+    import math as _m
+    a = _quat_normalize(a)
+    b = _quat_normalize(b)
+    dot = sum(x * y for x, y in zip(a, b))
+    if dot < 0.0:
+        b = [-c for c in b]
+        dot = -dot
+    if dot > 0.9995:
+        r = [a[i] + t * (b[i] - a[i]) for i in range(4)]
+        return _quat_normalize(r)
+    theta = _m.acos(min(1.0, dot))
+    so = _m.sin(theta)
+    wa = _m.sin((1.0 - t) * theta) / so
+    wb = _m.sin(t * theta) / so
+    return [wa * a[i] + wb * b[i] for i in range(4)]
+
+
 def parabola_waypoints(cfg):
     p = cfg.get("parabola", {})
     n = int(p.get("n", 20))
@@ -112,17 +146,28 @@ def parabola_waypoints(cfg):
     a = float(p.get("a", 1.0))
     z = float(p.get("z", 0.0))
 
-    ori0 = cfg.get("ori0")
-    if ori0 is None:
-        ori0 = cfg["tcp_ori_deg"]
-    scale = cfg.get("ori_scale", [0.0, 0.0, 0.0])
+    anchors = cfg.get("ori_anchors", {})
+    a_start = anchors.get("start", [90, 0, 0])
+    a_mid = anchors.get("mid", [180, 90, 0])
+    a_end = anchors.get("end", [-90, 0, 0])
+    q_start = pb.getQuaternionFromEuler([math.radians(v) for v in a_start])
+    q_mid = pb.getQuaternionFromEuler([math.radians(v) for v in a_mid])
+    q_end = pb.getQuaternionFromEuler([math.radians(v) for v in a_end])
+
+    mid = n // 2
+    last = n - 1
 
     wps = []
     for idx in range(n):
         value = -y_max + 2 * y_max * idx / (n - 1) if n > 1 else 0.0
         x = x0 + a * value * value
-        frac = idx / (n - 1) if n > 1 else 0.0
-        rot = [ori0[k] + scale[k] * frac for k in range(3)]
+        if idx <= mid:
+            t = idx / mid if mid > 0 else 0.0
+            q = _quat_slerp(q_start, q_mid, t)
+        else:
+            t = (idx - mid) / (last - mid) if last > mid else 1.0
+            q = _quat_slerp(q_mid, q_end, t)
+        rot = [math.degrees(v) for v in pb.getEulerFromQuaternion(q)]
         wps.append({
             "name": f"W{idx}",
             "value": value,
@@ -140,14 +185,13 @@ START_POSITIONS = {
             {"tcp_pos": [0.85, 0, 0.38], "tcp_ori_deg": [0, 0, 0], "label": "1", "use_current_seed": False},
             {"tcp_pos": [0.615, 0, 0.295], "tcp_ori_deg": [0, 90, 0], "label": "2", "use_current_seed": True},
         ],
-        "jaw_pos":  [0.9, 0, 0.3],
+        "jaw_pos":  [0.65, 0, 0.3],
         "jaw_euler_deg": [0, 0, 90],
         "jaw_folder": 1,
         "jaw_type":  "lower",
         "generator": parabola_waypoints,
-        "parabola":  {"x0": 0.615, "a": 20, "z": 0.295, "n": 20, "y_max": 0.05},
-        "ori0": [90, 0, 0],
-        "ori_scale": [90, 30, 60],
+        "parabola":  {"x0": 0.615, "a": 35, "z": 0.295, "n": 21, "y_max": 0.037},
+        "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
     },
     "aussen2": {
         "tcp_pos":  [0.615, 0, 0.295],
@@ -161,7 +205,7 @@ START_POSITIONS = {
         "jaw_type":  "lower",
         "generator": parabola_waypoints,
         "parabola":  {"x0": 0.615, "a": 18.5, "z": 0.295, "n": 20, "y_max": 0.05},
-        "ori_scale": [90, 30, 60],
+        "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
     },
     "oben": {
         "tcp_pos":  [0.85, 0.0, 0.38],
