@@ -1,12 +1,19 @@
 import math
 import os
 
-import pybullet as pb
+import importlib.util as _ilu
 
 # ── Pfade ──
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 JAWS_DIR = os.path.join(PKG_DIR, "data", "meshes_jaws")
 ROBOT_URDF_PATH = os.path.join(PKG_DIR, "src", "ur5e_bullet", "ur_e_description", "urdf", "ur5e.urdf")
+
+# Waypoint-Generator: ausgelagert in das Schwestermodul waypoints.py
+# (sys.path-unabhaengig geladen, wie der config-Import in __init__/sim).
+_wp_spec = _ilu.spec_from_file_location("waypoints", os.path.join(PKG_DIR, "waypoints.py"))
+_wp_mod = _ilu.module_from_spec(_wp_spec)
+_wp_spec.loader.exec_module(_wp_mod)
+parabola_waypoints = _wp_mod.parabola_waypoints
 
 # ── Gebiss ──
 # Position/Orientierung kommen NICHT aus globalen Konstanten, sondern aus den
@@ -97,136 +104,6 @@ JOINTS = [
 #   nacheinander angefahren werden (jeweils mit eigenem IK-Seed), bevor die
 #   endgueltige tcp_pos angefahren wird – zur besseren Beeinflussung des IK.
 #   Achtung: approach != waypoints (letztere sind die '+/'-navigierbaren Punkte).
-
-# ── Waypoint-Generator (Parabel) ──
-# Echte Python-Funktion, kann frei angepasst werden. Sie wird je Startposition
-# ueber den Key 'generator' referenziert und berechnet Position UND Orientierung.
-#
-# Position (power-Parabel): x = x0 + a*|value/y_max|^power,  y = value,  z = z
-#   - power : Kurvenform; 2 = flache x^2-Parabel, 4 = x^4 (flache Mitte,
-#             steile Enden, Gebissform), auch 3 oder andere Werte moeglich.
-#   - Die Renormierung (value/y_max) macht 'a' direkt zum x-Ausschlag an den
-#     aeussersten Wegpunkten (W0/W{n-1}): dort ist |value/y_max|^power = 1
-#     -> x = x0 + a, unabhaengig von power und y_max.
-#   - Gleiche Verteilung: Die n Wegpunkte werden NICHT gleichmaessig in 'value',
-#     sondern gleichmaessig nach Bogenlaenge entlang der Kurve verteilt
-#     (konstanter Abstand auf der Linie). Dadurch sammeln sich die Punkte nicht
-#     in der Mitte, sondern liegen gleichmaessig auf der Kurve.
-#
-# Orientierung: smoother Uebergang (Quaternion-Slerp) zwischen drei Ankern.
-#   ori_anchors = {"start": <euler>, "mid": <euler>, "end": <euler>}
-#   - start : Orientierung am ersten Waypoint (W0)
-#   - mid   : Orientierung am mittigen Waypoint (n muss UNGERADE sein, damit
-#             der mittige Exakt mittig liegt); mittiger Index = n//2
-#   - end   : Orientierung am letzten Waypoint (W{n-1})
-#   Alle Winkel in Grad. Zwischenpunkte werden stueckweise sph aerisch
-#   linear interpoliert (slerp), dadurch werden Achsenspruenge/Mehrdeutigkeiten
-#   der Euler-Darstellung vermieden.
-def _quat_normalize(q):
-    import math as _m
-    n = _m.sqrt(sum(c * c for c in q))
-    return [c / n for c in q] if n > 0 else [1.0, 0.0, 0.0, 0.0]
-
-
-def _quat_slerp(a, b, t):
-    import math as _m
-    a = _quat_normalize(a)
-    b = _quat_normalize(b)
-    dot = sum(x * y for x, y in zip(a, b))
-    if dot < 0.0:
-        b = [-c for c in b]
-        dot = -dot
-    if dot > 0.9995:
-        r = [a[i] + t * (b[i] - a[i]) for i in range(4)]
-        return _quat_normalize(r)
-    theta = _m.acos(min(1.0, dot))
-    so = _m.sin(theta)
-    wa = _m.sin((1.0 - t) * theta) / so
-    wb = _m.sin(t * theta) / so
-    return [wa * a[i] + wb * b[i] for i in range(4)]
-
-
-def parabola_waypoints(cfg):
-    p = cfg.get("parabola", {})
-    n = int(p.get("n", 20))
-    y_max = float(p.get("y_max", 0.05))
-    x0 = float(p.get("x0", 0.0))
-    a = float(p.get("a", 1.0))
-    z = float(p.get("z", 0.0))
-    power = float(p.get("power", 4.0))
-
-    anchors = cfg.get("ori_anchors", {})
-    a_start = anchors.get("start", [90, 0, 0])
-    a_mid = anchors.get("mid", [180, 90, 0])
-    a_end = anchors.get("end", [-90, 0, 0])
-    q_start = pb.getQuaternionFromEuler([math.radians(v) for v in a_start])
-    q_mid = pb.getQuaternionFromEuler([math.radians(v) for v in a_mid])
-    q_end = pb.getQuaternionFromEuler([math.radians(v) for v in a_end])
-
-    mid = n // 2
-    last = n - 1
-
-    # Bogenlaenge entlang der Kurve numerisch berechnen: v -> kumulierte Laenge.
-    # x(v) = x0 + a*|v/y_max|^power, y(v) = v  -> ds/dv = sqrt((dx/dv)^2 + 1)
-    def dx_dv(v):
-        return a * power * abs(v / y_max) ** (power - 1) / y_max if y_max > 0 else 0.0
-
-    n_int = 4000
-    v_grid = []
-    L_grid = []
-    acc = 0.0
-    prev = -y_max
-    prev_x = dx_dv(prev)
-    v_grid.append(prev)
-    L_grid.append(0.0)
-    for k in range(1, n_int + 1):
-        v = -y_max + 2 * y_max * k / n_int
-        d = dx_dv(v)
-        acc += math.sqrt(((prev_x + d) / 2.0) ** 2 + 1.0) * (v - prev)
-        prev = v
-        prev_x = d
-        v_grid.append(v)
-        L_grid.append(acc)
-    L_total = acc
-
-    if n > 1 and L_total > 0:
-        values = []
-        for i in range(n):
-            target = L_total * i / (n - 1)
-            # invertiere L(v)=target per linearer Interpolation (L monoton)
-            for k in range(1, len(L_grid)):
-                if L_grid[k] >= target:
-                    v0, v1 = v_grid[k - 1], v_grid[k]
-                    l0, l1 = L_grid[k - 1], L_grid[k]
-                    if l1 > l0:
-                        f = (target - l0) / (l1 - l0)
-                    else:
-                        f = 0.0
-                    values.append(v0 + f * (v1 - v0))
-                    break
-            else:
-                values.append(v_grid[-1])
-    else:
-        values = [0.0] * n
-
-    wps = []
-    for idx in range(n):
-        value = values[idx]
-        x = x0 + a * abs(value / y_max) ** power if y_max > 0 else x0
-        if idx <= mid:
-            t = idx / mid if mid > 0 else 0.0
-            q = _quat_slerp(q_start, q_mid, t)
-        else:
-            t = (idx - mid) / (last - mid) if last > mid else 1.0
-            q = _quat_slerp(q_mid, q_end, t)
-        rot = [math.degrees(v) for v in pb.getEulerFromQuaternion(q)]
-        wps.append({
-            "name": f"W{idx}",
-            "value": value,
-            "tcp_pos": [x, value, z],
-            "tcp_ori_deg": rot,
-        })
-    return wps
 
 
 START_POSITIONS = {
