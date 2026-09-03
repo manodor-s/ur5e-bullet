@@ -281,6 +281,14 @@ def add_scanner_and_camera(arm_obj, meshes):
     print("  + ScannerLight -> scanner_stab (Position = Pybullet-TCP, Blick +Z-Welt)")
 
 
+jaw_log = []
+
+
+def _jaw_log(msg):
+    jaw_log.append(str(msg))
+    print(msg)
+
+
 def _enable_backface_culling(mat):
     """Macht das Material einseitig: Rueckseite (Backfacing) wird transparent,
     Vorderseite behaelt ihr BSTF. Damit ist das Gebiss von unten/innen
@@ -324,9 +332,9 @@ def _enable_backface_culling(mat):
     mix.location.y = bsdf.location.y
 
     links.new(geom.outputs["Backfacing"], mix.inputs["Fac"])
-    links.new(transp.outputs["BSDF"], mix.inputs[1])
-    links.new(bsdf.outputs["BSDF"], mix.inputs[2])
-    links.new(mix.outputs["BSDF"], mtl_out.inputs["Surface"])
+    links.new(bsdf.outputs["BSDF"], mix.inputs[1])
+    links.new(transp.outputs["BSDF"], mix.inputs[2])
+    links.new(mix.outputs[0], mtl_out.inputs["Surface"])
 
     mat["backface_culling_applied"] = True
 
@@ -341,20 +349,21 @@ def remove_jaw():
 
 
 def replace_jaw(folder=1, jaw_type="lower", pos=None, euler_deg=None):
+    jaw_log.clear()
     remove_jaw()
 
     if pos is None or euler_deg is None:
-        print("  ! Keine Gebisspos/Orientierung uebergeben – Gebiss nicht platziert")
+        _jaw_log("  ! Keine Gebisspos/Orientierung uebergeben – Gebiss nicht platziert")
         return False
 
     stl_path = os.path.join(ROOT, "data", "meshes_jaws", str(folder), f"{jaw_type}.stl")
     if not os.path.exists(stl_path):
-        print(f"  - Jaw fehlt: {stl_path}")
+        _jaw_log(f"  - Jaw fehlt: {stl_path}")
         return False
 
     jaw = _import_stl(stl_path)
     if not jaw or jaw.type != "MESH":
-        print(f"  ! Jaw-Import fehlgeschlagen: {stl_path}")
+        _jaw_log(f"  ! Jaw-Import fehlgeschlagen: {stl_path}")
         return False
 
     jaw.name = f"gebiss_{jaw_type}"
@@ -363,6 +372,18 @@ def replace_jaw(folder=1, jaw_type="lower", pos=None, euler_deg=None):
     jaw.select_set(True)
     bpy.context.view_layer.objects.active = jaw
     bpy.ops.object.transform_apply(scale=True)
+    _jaw_log(f"  [jaw] importiert: {jaw.name}")
+
+    # Normalen konsistent nach aussen ausrichten -> Backface-Culling verlaesslich
+    try:
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.normals_make_consistent(inside=False)
+        bpy.ops.object.mode_set(mode="OBJECT")
+        _jaw_log(f"  [jaw] Normalen konsistent gemacht ({len(jaw.data.vertices)} Vertices)")
+    except Exception as _e:
+        bpy.ops.object.mode_set(mode="OBJECT")
+        _jaw_log(f"  [jaw] Normals-Fix uebersprungen: {_e}")
+
     jaw.location = Vector((pos[0] * S, pos[1] * S, pos[2] * S))
     jaw.rotation_euler = (
         math.radians(euler_deg[0]),
@@ -370,6 +391,7 @@ def replace_jaw(folder=1, jaw_type="lower", pos=None, euler_deg=None):
         math.radians(euler_deg[2]),
     )
 
+    # GebissMaterial erzeugen (ueberall gleich) und dem Jaw deterministisch zuweisen
     mat = bpy.data.materials.get("GebissMaterial")
     if mat is None:
         mat = bpy.data.materials.new("GebissMaterial")
@@ -378,13 +400,24 @@ def replace_jaw(folder=1, jaw_type="lower", pos=None, euler_deg=None):
         if bsdf:
             bsdf.inputs["Roughness"].default_value = GEBISS_ROUGHNESS
             bsdf.inputs["Specular IOR Level"].default_value = GEBISS_SPECULAR
-    _enable_backface_culling(mat)
-    if jaw.data.materials:
-        jaw.data.materials[0] = mat
-    else:
-        jaw.data.materials.append(mat)
+        _jaw_log(f"  [jaw] GebissMaterial erzeugt (use_nodes={mat.use_nodes})")
 
-    print(f"  + {jaw.name} -> ({jaw.location.x:.2f}, {jaw.location.y:.2f}, {jaw.location.z:.2f})")
+    # Alte Material-Slots entfernen, dann GebissMaterial an Slot 0
+    while jaw.data.materials:
+        jaw.data.materials.pop()
+    jaw.data.materials.append(mat)
+    jaw.active_material_index = 0
+
+    try:
+        _enable_backface_culling(mat)
+        _jaw_log("  [jaw] Backface-Culling-Kette angewendet")
+    except Exception as _e:
+        import traceback
+        _jaw_log(traceback.format_exc())
+        _jaw_log(f"  [jaw] Backface-Culling fehlgeschlagen: {_e}")
+
+    _jaw_log(f"  [jaw] Material-Slots: {[m.name for m in jaw.data.materials]}")
+    _jaw_log(f"  + {jaw.name} -> ({jaw.location.x:.2f}, {jaw.location.y:.2f}, {jaw.location.z:.2f})")
     return True
 
 

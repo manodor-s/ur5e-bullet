@@ -145,7 +145,7 @@ def poll():
 
             def _do_replace_jaw(f=folder, t=jaw_type, p=pos, e=euler):
                 ok = rig.replace_jaw(f, t, pos=p, euler_deg=e)
-                send_to_host({"jaw_complete": bool(ok)})
+                send_to_host({"jaw_complete": bool(ok), "jaw_log": "\n".join(rig.jaw_log)})
                 return None
             bpy.app.timers.register(_do_replace_jaw, first_interval=0)
         if "jaw_unload" in msg:

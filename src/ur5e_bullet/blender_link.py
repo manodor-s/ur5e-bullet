@@ -108,6 +108,8 @@ class BlenderMirror:
             self._render_done.set()
         if "jaw_complete" in msg:
             self._jaw_done.set()
+            if "jaw_log" in msg and msg.get("jaw_log"):
+                print(msg["jaw_log"])
 
     def send_current(self):
         try:
