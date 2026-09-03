@@ -281,6 +281,56 @@ def add_scanner_and_camera(arm_obj, meshes):
     print("  + ScannerLight -> scanner_stab (Position = Pybullet-TCP, Blick +Z-Welt)")
 
 
+def _enable_backface_culling(mat):
+    """Macht das Material einseitig: Rueckseite (Backfacing) wird transparent,
+    Vorderseite behaelt ihr BSTF. Damit ist das Gebiss von unten/innen
+    unsichtbar, von der aussen liegenden (normalen) Seite sichtbar.
+    Idempotent: wird nur einmal pro Material angewendet."""
+    if mat.get("backface_culling_applied"):
+        return
+    nt = mat.node_tree
+    nodes = nt.nodes
+    links = nt.links
+
+    bsdf = nodes.get("Principled BSDF")
+    if bsdf is None:
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        bsdf.inputs["Roughness"].default_value = GEBISS_ROUGHNESS
+        bsdf.inputs["Specular IOR Level"].default_value = GEBISS_SPECULAR
+
+    for n in list(nodes):
+        if n.type == "MIX_SHADER" and n.name.startswith("BackfaceCull"):
+            nodes.remove(n)
+        if n.type == "BSDF_TRANSPARENT" and n.name.startswith("BackfaceCull"):
+            nodes.remove(n)
+        if n.type == "NEW_GEOMETRY" and n.name.startswith("BackfaceCull"):
+            nodes.remove(n)
+
+    # Vorhandene Surface-Verbindung trennen (falls vorhanden)
+    mtl_out = nodes.get("Material Output")
+    if mtl_out is None:
+        mtl_out = nodes.new("ShaderNodeOutputMaterial")
+    for l in list(links):
+        if l.to_node == mtl_out and l.to_socket.name == "Surface":
+            links.remove(l)
+
+    geom = nodes.new("ShaderNodeNewGeometry")
+    geom.name = "BackfaceCull_Geom"
+    transp = nodes.new("ShaderNodeBsdfTransparent")
+    transp.name = "BackfaceCull_Transparent"
+    mix = nodes.new("ShaderNodeMixShader")
+    mix.name = "BackfaceCull_Mix"
+    mix.location.x = bsdf.location.x + 300
+    mix.location.y = bsdf.location.y
+
+    links.new(geom.outputs["Backfacing"], mix.inputs["Fac"])
+    links.new(transp.outputs["BSDF"], mix.inputs[1])
+    links.new(bsdf.outputs["BSDF"], mix.inputs[2])
+    links.new(mix.outputs["BSDF"], mtl_out.inputs["Surface"])
+
+    mat["backface_culling_applied"] = True
+
+
 def remove_jaw():
     for name in ("gebiss_lower", "gebiss_upper"):
         old = bpy.data.objects.get(name)
@@ -328,6 +378,7 @@ def replace_jaw(folder=1, jaw_type="lower", pos=None, euler_deg=None):
         if bsdf:
             bsdf.inputs["Roughness"].default_value = GEBISS_ROUGHNESS
             bsdf.inputs["Specular IOR Level"].default_value = GEBISS_SPECULAR
+    _enable_backface_culling(mat)
     if jaw.data.materials:
         jaw.data.materials[0] = mat
     else:
