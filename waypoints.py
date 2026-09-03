@@ -8,6 +8,18 @@ def _quat_normalize(q):
     return [c / n for c in q] if n > 0 else [1.0, 0.0, 0.0, 0.0]
 
 
+def _quat_mul(a, b):
+    """Quaternion-Produkt (Hamilton, xyzw wie pybullet): R(a)·R(b)."""
+    a1, a2, a3, a0 = a
+    b1, b2, b3, b0 = b
+    return [
+        a0*b1 + a1*b0 + a2*b3 - a3*b2,
+        a0*b2 - a1*b3 + a2*b0 + a3*b1,
+        a0*b3 + a1*b2 - a2*b1 + a3*b0,
+        a0*b0 - a1*b1 - a2*b2 - a3*b3,
+    ]
+
+
 def _quat_slerp(a, b, t):
     a = _quat_normalize(a)
     b = _quat_normalize(b)
@@ -33,6 +45,12 @@ def parabola_waypoints(cfg):
     a = float(p.get("a", 1.0))
     z = float(p.get("z", 0.0))
     power = float(p.get("power", 4.0))
+
+    # Per-Startposition schaltbar: Kamera-Blickachse (TCP-lokales -Z) auf den
+    # Gebiss-Mittelpunkt in der Hoehe der Waypoint-Ebene richten (Blickachse
+    # horizontal in der Ebene). Default an, kann je Startposition gesetzt werden.
+    look_at_jaw = cfg.get("look_at_jaw", True)
+    jaw = cfg.get("jaw_pos")
 
     anchors = cfg.get("ori_anchors", {})
     a_start = anchors.get("start", [90, 0, 0])
@@ -98,6 +116,28 @@ def parabola_waypoints(cfg):
         else:
             t = (idx - mid) / (last - mid) if last > mid else 1.0
             q = _quat_slerp(q_mid, q_end, t)
+
+        if look_at_jaw and jaw is not None:
+            wp_pos = [x, value, z]
+            d = [jaw[0] - wp_pos[0], jaw[1] - wp_pos[1], 0.0]
+            dn = math.sqrt(sum(c * c for c in d))
+            if dn > 1e-9:
+                d = [c / dn for c in d]
+                R = pb.getMatrixFromQuaternion(q)
+                f0 = [-(R[2]), -(R[5]), -(R[8])]
+                axis = [
+                    f0[1]*d[2] - f0[2]*d[1],
+                    f0[2]*d[0] - f0[0]*d[2],
+                    f0[0]*d[1] - f0[1]*d[0],
+                ]
+                an = math.sqrt(sum(c*c for c in axis))
+                if an > 1e-6:
+                    axis = [c/an for c in axis]
+                    dot = f0[0]*d[0] + f0[1]*d[1] + f0[2]*d[2]
+                    ang = math.acos(max(-1.0, min(1.0, dot)))
+                    dq = pb.getQuaternionFromAxisAngle(axis, ang)
+                    q = _quat_mul(dq, q)
+
         rot = [math.degrees(v) for v in pb.getEulerFromQuaternion(q)]
         wps.append({
             "name": f"W{idx}",

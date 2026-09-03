@@ -87,6 +87,15 @@ GHOST_COLOR = [0.2, 0.8, 1.0, 0.4]
 PREVIEW_PAUSE = 0.6
 WAYPOINT_MARKER_RADIUS = 0.001
 
+# ── Debug: Sichtachse (Stab vom TCP) ──
+# Zeichnet einen kollisionsfreien Stab vom TCP aus in Richtung der Kamera-
+# Blickachse (Kandidat: TCP-lokales -Z), um die TCP->Kamera-Orientierung
+# visuell zu verifizieren.
+DRAW_VIEW_STICK = True
+VIEW_STICK_LENGTH = 0.05
+VIEW_STICK_RADIUS = 0.0015
+VIEW_STICK_COLOR = [1.0, 0.3, 0.0, 1.0]
+
 # ── Joint Limits (Winkel in Grad) ──
 # Ein Eintrag pro steuerbarem Gelenk, Reihenfolge = Joint-Reihenfolge
 # (shoulder_pan, shoulder_lift, elbow, wrist_1, wrist_2, wrist_3).
@@ -125,6 +134,7 @@ START_POSITIONS = {
         "generator": parabola_waypoints,
         "parabola":  {"x0": 0.615, "a": 0.046, "z": 0.295, "n": 21, "y_max": 0.037, "power": 4},
         "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
+        "look_at_jaw": True,
     },
     "aussen2": {
         "tcp_pos":  [0.615, 0, 0.295],
@@ -139,6 +149,7 @@ START_POSITIONS = {
         "generator": parabola_waypoints,
         "parabola":  {"x0": 0.615, "a": 0.0463, "z": 0.295, "n": 20, "y_max": 0.05, "power": 4},
         "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
+        "look_at_jaw": True,
     },
     "oben": {
         "tcp_pos":  [0.85, 0.0, 0.38],
