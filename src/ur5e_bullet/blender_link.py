@@ -104,7 +104,10 @@ class BlenderMirror:
             n = msg['render_progress']
             print(f"\r  Rendering... [{n}]", end="", flush=True)
         if "render_complete" in msg:
-            print(f"\n  Render gespeichert: {msg['render_complete']}")
+            paths = msg["render_complete"]
+            if isinstance(paths, str):
+                paths = [paths]
+            print("\n  Render gespeichert: " + ", ".join(paths))
             self._render_done.set()
         if "jaw_complete" in msg:
             self._jaw_done.set()

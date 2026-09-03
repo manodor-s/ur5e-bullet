@@ -41,6 +41,10 @@ CAMERA_LENS_MM = CAMERA_SENSOR_W_MM / (2 * math.tan(math.radians(CAMERA_FOV_DEG)
 CAMERA_NEAR_M = 0.001
 CAMERA_FAR_M = 0.03
 CAMERA_DISPLAY_M = 0.2
+# Seitlicher Versatz der beiden Kameras (Stereo-Baseline) relativ zum TCP,
+# in Scanner-lokalen Koordinaten (Y-Achse), in Meter (S=1 -> 1 BU).
+# Jede Kamera wird um +/- CAMERA_LATERAL_OFFSET quer zur Blickrichtung versetzt.
+CAMERA_LATERAL_OFFSET = 0.005
 
 # ── Licht ──
 LIGHT_POWER = 0.001

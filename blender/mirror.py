@@ -18,6 +18,8 @@ CONTROL_JOINTS = [
 _conn = None
 _buffer = ""
 _render_tile_count = 0
+_render_remaining = 0
+_render_paths = []
 
 
 def send_to_host(data):
@@ -80,11 +82,17 @@ def _apply_joints(joints):
 def _apply_tcp(tcp):
     if not tcp or len(tcp) < 3:
         return
-    pos = (tcp[0] * rig.S, tcp[1] * rig.S, tcp[2] * rig.S)
-    for name in ("ScannerCamera", "ScannerLight"):
+    for name, sign in (("ScannerCamera_L", -1.0), ("ScannerCamera_R", 1.0)):
         obj = bpy.data.objects.get(name)
         if obj is not None:
-            obj.location = pos
+            obj.location = (
+                tcp[0] * rig.S,
+                (tcp[1] + sign * rig.CAMERA_LATERAL_OFFSET) * rig.S,
+                tcp[2] * rig.S,
+            )
+    light = bpy.data.objects.get("ScannerLight")
+    if light is not None:
+        light.location = (tcp[0] * rig.S, tcp[1] * rig.S, tcp[2] * rig.S)
 
 
 def poll():
@@ -112,8 +120,10 @@ def poll():
         if "tcp" in msg:
             _apply_tcp(msg["tcp"])
         if "render" in msg:
-            global _render_tile_count
+            global _render_tile_count, _render_remaining, _render_paths
             _render_tile_count = 0
+            _render_remaining = 2
+            _render_paths = []
 
             @bpy.app.handlers.persistent
             def _on_render_write(scene, depsgraph=None):
@@ -123,19 +133,32 @@ def poll():
 
             @bpy.app.handlers.persistent
             def _on_render_complete(scene, depsgraph=None):
-                send_to_host({"render_complete": scene.render.filepath})
-                if _on_render_write in bpy.app.handlers.render_write:
-                    bpy.app.handlers.render_write.remove(_on_render_write)
-                if _on_render_complete in bpy.app.handlers.render_complete:
-                    bpy.app.handlers.render_complete.remove(_on_render_complete)
+                global _render_remaining, _render_paths
+                _render_remaining -= 1
+                if _render_remaining <= 0:
+                    send_to_host({"render_complete": list(_render_paths)})
+                    for w in list(bpy.app.handlers.render_write):
+                        if w.__name__ == "_on_render_write":
+                            bpy.app.handlers.render_write.remove(w)
+                    for c in list(bpy.app.handlers.render_complete):
+                        if c.__name__ == "_on_render_complete":
+                            bpy.app.handlers.render_complete.remove(c)
 
             bpy.app.handlers.render_write.append(_on_render_write)
             bpy.app.handlers.render_complete.append(_on_render_complete)
 
             def _do_render():
-                bpy.ops.render.render(write_still=True)
+                global _render_paths
+                _render_paths = []
+                for suffix, fname in (("_L", "render_L.png"), ("_R", "render_R.png")):
+                    cam = bpy.data.objects.get(f"ScannerCamera{suffix}")
+                    if cam is not None:
+                        bpy.context.scene.camera = cam
+                    path = os.path.join(rig.ROOT, fname)
+                    bpy.context.scene.render.filepath = path
+                    _render_paths.append(path)
+                    bpy.ops.render.render(write_still=True)
                 return None
-            bpy.context.scene.render.filepath = os.path.join(rig.ROOT, "render.png")
             bpy.app.timers.register(_do_render, first_interval=0)
         if "replace_jaw" in msg:
             folder = msg["replace_jaw"].get("folder", 1)

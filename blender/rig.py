@@ -35,6 +35,7 @@ from config import (
     GEBISS_ROUGHNESS, GEBISS_SPECULAR,
     CAMERA_ROLL_DEG, CAMERA_SENSOR_W_MM, CAMERA_SENSOR_H_MM,
     CAMERA_FOV_DEG, CAMERA_LENS_MM, CAMERA_NEAR_M, CAMERA_FAR_M, CAMERA_DISPLAY_M,
+    CAMERA_LATERAL_OFFSET,
     LIGHT_POWER, LIGHT_OFFSET,
     RENDER_W, RENDER_H, RENDER_ENGINE, RENDER_DEVICE, RENDER_TRANSPARENT,
     TOOL_OFFSET_POS, S,
@@ -251,24 +252,29 @@ def add_scanner_and_camera(arm_obj, meshes):
     meshes["scanner_stab"] = scanner_obj
     print("  + scanner_stab -> wrist_3_joint")
 
-    bpy.ops.object.camera_add()
-    cam = bpy.context.active_object
-    cam.name = "ScannerCamera"
-    cam.data.angle = CAMERA_FOV
-    cam.data.sensor_width = CAMERA_SENSOR_W
-    cam.data.sensor_height = CAMERA_SENSOR_H
-    cam.data.sensor_fit = "AUTO"
-    cam.data.clip_start = CAMERA_NEAR_M * S
-    cam.data.clip_end = CAMERA_FAR_M * S
-    cam.data.display_size = CAMERA_DISPLAY_M * S
-    cam.parent = scanner_obj
-    cam.matrix_parent_inverse = Matrix.Identity(4)
-    cam.location = Vector((TOOL_OFFSET_POS[0] * S, TOOL_OFFSET_POS[1] * S, TOOL_OFFSET_POS[2] * S))
-    cam.rotation_mode = "QUATERNION"
     base_q = Euler((0, math.radians(-90), 0), "XYZ").to_quaternion()
-    cam.rotation_quaternion = base_q @ Quaternion((0, 0, 1), CAMERA_ROLL)
-    bpy.context.scene.camera = cam
-    print("  + ScannerCamera -> scanner_stab (Position = Pybullet-TCP, Blick +Z-Welt)")
+    for suffix, sign in (("_L", -1.0), ("_R", 1.0)):
+        bpy.ops.object.camera_add()
+        cam = bpy.context.active_object
+        cam.name = f"ScannerCamera{suffix}"
+        cam.data.angle = CAMERA_FOV
+        cam.data.sensor_width = CAMERA_SENSOR_W
+        cam.data.sensor_height = CAMERA_SENSOR_H
+        cam.data.sensor_fit = "AUTO"
+        cam.data.clip_start = CAMERA_NEAR_M * S
+        cam.data.clip_end = CAMERA_FAR_M * S
+        cam.data.display_size = CAMERA_DISPLAY_M * S
+        cam.parent = scanner_obj
+        cam.matrix_parent_inverse = Matrix.Identity(4)
+        cam.location = Vector((
+            TOOL_OFFSET_POS[0] * S,
+            (TOOL_OFFSET_POS[1] + sign * CAMERA_LATERAL_OFFSET) * S,
+            TOOL_OFFSET_POS[2] * S,
+        ))
+        cam.rotation_mode = "QUATERNION"
+        cam.rotation_quaternion = base_q @ Quaternion((0, 0, 1), CAMERA_ROLL)
+        bpy.context.scene.camera = cam
+        print(f"  + ScannerCamera{suffix} -> scanner_stab (Blick +Z-Welt, lateral {sign*CAMERA_LATERAL_OFFSET:+.4f})")
 
     bpy.ops.object.light_add(type="POINT")
     light = bpy.context.active_object
