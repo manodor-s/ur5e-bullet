@@ -59,10 +59,6 @@ RRT_RESTARTS = 30
 RRT_SMOOTH = 30
 RRT_SEED = 0
 
-# Dauer (Sekunden), die der gezeichnete RRT-Pfad vor dem automatischen
-# Anfahren eines Punktes sichtbar bleibt (ohne Rückfrage; nur Optik).
-PREVIEW_PAUSE = 0.6
-
 # ── Blender Scale Factor ──
 S = 1
 
@@ -70,6 +66,8 @@ S = 1
 IK_LAMBDA = 0.05
 IK_TOLERANCE = 0.08
 GHOST_COLOR = [0.2, 0.8, 1.0, 0.4]
+PREVIEW_PAUSE = 0.6
+WAYPOINT_MARKER_RADIUS = 0.001
 
 # ── Joint Limits (Winkel in Grad) ──
 # Ein Eintrag pro steuerbarem Gelenk, Reihenfolge = Joint-Reihenfolge
@@ -148,6 +146,7 @@ START_POSITIONS = {
         "jaw_type":  "lower",
         "generator": parabola_waypoints,
         "parabola":  {"x0": 0.615, "a": 20, "z": 0.295, "n": 20, "y_max": 0.05},
+        "ori0": [90, 0, 0],
         "ori_scale": [90, 30, 60],
     },
     "aussen2": {

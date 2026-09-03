@@ -421,11 +421,9 @@ class UR5Sim():
             obstacles = self._obstacles()
         ee_target = self._tcp_to_ee(tcp_pos, tcp_ori)
         render_flag = pybullet.COV_ENABLE_RENDERING
-        pybullet.configureDebugVisualizer(render_flag, 0)
 
         if path is not None:
             def run_preplanned():
-                pybullet.configureDebugVisualizer(render_flag, 1)
                 self._execute(path, speed)
                 actual_tcp, actual_quat = self.get_tcp_pose()
                 actual_ori = pybullet.getEulerFromQuaternion(actual_quat)
@@ -438,6 +436,8 @@ class UR5Sim():
                 self._save_last(tcp_pos, tcp_ori)
                 return True
             return run_preplanned()
+
+        pybullet.configureDebugVisualizer(render_flag, 0)
 
         current_joints = [s[0] for s in pybullet.getJointStates(self.ur5, self._joint_ids)]
         ik_seed = seed if seed is not None else current_joints

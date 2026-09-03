@@ -19,6 +19,7 @@ _cfg_spec.loader.exec_module(_cfg_mod)
 START_POSITIONS = _cfg_mod.START_POSITIONS
 BOOT_START = _cfg_mod.BOOT_START
 PREVIEW_PAUSE = _cfg_mod.PREVIEW_PAUSE
+WAYPOINT_MARKER_RADIUS = _cfg_mod.WAYPOINT_MARKER_RADIUS
 
 
 def _draw_crosshair(pos, color, items, label=None):
@@ -127,18 +128,26 @@ def _parse_command(tokens):
     })
 
 
-def _draw_waypoints(wps, active_idx=None):
-    items = []
-    color = [0.2, 0.8, 1.0]
-    line_color = [0.2, 0.8, 1.0, 0.4]
-    for i, wp in enumerate(wps):
+def _draw_waypoint_bodies(wps):
+    """Erzeugt fuer jeden Waypoint einen kleinen, persistenten Kugel-Body.
+
+    Waypoints werden als echte pybullet-Bodies statt als Debug-Items dargestellt:
+    Damit sind sie von removeAllUserDebugItems() und der Debug-Handle-Invalidierung
+    (die zu Geister-Resten fuehrt) vollstaendig unberuehrt. Sie bleiben stehen, bis
+    die Bodies explizit per removeBody() entfernt werden -> kein staendiges
+    Neuzeichnen. Kugeln erhalten KEINE Kollisionsgeometrie, daher kollidieren sie
+    nie mit dem Roboter und zaehlen nicht als Hindernisse."""
+    bodies = []
+    for wp in wps:
         pos = wp["tcp_pos"]
-        _draw_crosshair(pos, color, items)
-        if i > 0:
-            items.append(pybullet.addUserDebugLine(wps[i-1]["tcp_pos"], pos, line_color, 1))
-    if len(wps) > 1:
-        items.append(pybullet.addUserDebugLine(wps[-1]["tcp_pos"], wps[0]["tcp_pos"], line_color, 1))
-    return items
+        vis = pybullet.createVisualShape(
+            pybullet.GEOM_SPHERE, radius=WAYPOINT_MARKER_RADIUS, rgbaColor=[0.2, 0.8, 1.0, 0.9],
+        )
+        body = pybullet.createMultiBody(
+            baseVisualShapeIndex=vis, basePosition=pos,
+        )
+        bodies.append(body)
+    return bodies
 
 
 def _resolve_waypoints(cfg):
@@ -163,45 +172,28 @@ def demo_simulation():
         return _draw_crosshair(pos, [0, 1, 0], [])
 
     def draw_waypoints():
-        for it in waypoint_items:
+        for b in waypoint_bodies:
             try:
-                pybullet.removeUserDebugItem(it)
+                pybullet.removeBody(b)
             except Exception:
                 pass
-        waypoint_items.clear()
+        waypoint_bodies.clear()
         if current_start is None:
             return
         wps = _resolve_waypoints(START_POSITIONS[current_start])
         if not wps:
             return
-        waypoint_items.extend(_draw_waypoints(wps, waypoint_idx))
+        waypoint_bodies.extend(_draw_waypoint_bodies(wps))
 
-    def clear_temps():
-        """Entfernt nur die temporaeren Vorschau- und TCP-Items.
-        Das persistente Waypoint-Overlay (waypoint_items) bleibt davon unberuehrt,
-        damit es nicht bei jeder Bewegung kurz verschwindet/neu gezeichnet wird."""
-        for it in items:
-            try:
-                pybullet.removeUserDebugItem(it)
-            except Exception:
-                pass
+    def reset_overlay():
+        """Entfernt ALLE Debug-Items (auch verwaiste "Geister") via
+        removeAllUserDebugItems und zeichnet das TCP-Crosshair neu.
+        Die persistenten Waypoint-Bodies sind davon unberuehrt und bleiben stehen."""
+        nonlocal tcp_items
+        pybullet.removeAllUserDebugItems()
         items.clear()
-        for it in tcp_items:
-            try:
-                pybullet.removeUserDebugItem(it)
-            except Exception:
-                pass
         tcp_items.clear()
-
-    def refresh_overlay():
-        """Baut das TCP-Crosshair UND das Waypoint-Overlay nach einer Bewegung
-        wieder auf. move_to schaltet das Rendering waehrend der Bewegung ab
-        (configureDebugVisualizer COV_ENABLE_RENDERING) und wieder an; dabei
-        verwirft pybullet die Debug-Items, daher muessen sie danach neu erzeugt
-        werden. draw_waypoints() raeumt alte Items selbst auf (kein Doppel-Overlay)."""
-        tcp_items.clear()
-        tcp_items.extend(draw_tcp())
-        draw_waypoints()
+        tcp_items = draw_tcp()
 
     def draw_probe_preview(rrt_waypoints, start_tcp, target_position, target_orientation):
         if rrt_waypoints:
@@ -214,34 +206,57 @@ def demo_simulation():
             print(f"  ⚠ Kein RRT-Pfad zu ({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f})")
         return target_position, target_orientation
 
-    def plan_and_show(pos, ori, seed=None):
-        """Plant den RRT-Pfad (mit optionalem IK-Seed), zeichnet ihn kurz als
-        Linie (ohne Rückfrage) und gibt den Joint-Pfad zum Fahren zurueck."""
+    def preview_and_move(pos, ori, speed, seed=None, confirm=False):
+        """Gemeinsamer Ablauf fuer den m-Befehl (confirm=True, mit Rueckfrage)
+        und alle automatischen Bewegungen (confirm=False, kurze Pause):
+        Zielmarker + RRT-Pfad zeichnen, warten, den Pfad (1x) fahren, aufraeumen.
+        Gibt True bei Erfolg, False wenn kein Pfad/unerreichbar, None bei Abbruch."""
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        saved_fds = (os.dup(1), os.dup(2))
+        os.dup2(devnull_fd, 1), os.dup2(devnull_fd, 2)
+
         probe_result = sim._probe_path(pos, ori, seed=seed)
-        start_tcp, _, _, _, rrt_waypoints, path = probe_result
-        if rrt_waypoints:
-            draw_probe_preview(rrt_waypoints, start_tcp, pos, ori)
-            time.sleep(PREVIEW_PAUSE)
-        else:
-            print(f"  ⚠ Kein RRT-Pfad zu ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})")
-        clear_temps()
-        return path
+
+        os.dup2(saved_fds[0], 1), os.dup2(saved_fds[1], 2)
+        os.close(devnull_fd)
+
+        start_tcp, _, _, _, rrt_waypoints, plan_path = probe_result
+        _draw_crosshair(pos, [1, 1, 0], items,
+                        f"({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})")
+        target_pos, target_ori = draw_probe_preview(
+            rrt_waypoints, start_tcp, pos, ori,
+        )
+        ok = False
+        if plan_path is not None:
+            if confirm:
+                try:
+                    c = input("  Ausführen? [Y/n] ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    reset_overlay()
+                    return None
+                if c in ("", "y", "yes"):
+                    ok = sim.move_to(target_pos, target_ori, speed=speed, path=plan_path)
+            else:
+                time.sleep(PREVIEW_PAUSE)
+                ok = sim.move_to(target_pos, target_ori, speed=speed, path=plan_path)
+        reset_overlay()
+        return ok
 
     items = []
-    waypoint_items = []
+    waypoint_bodies = []
     tcp_items = []
+    current_start = None
+    waypoint_idx = 0
 
     if BOOT_START is not None:
         cfg = BOOT_START
         ori = [math.radians(v) for v in cfg["tcp_ori_deg"]]
         print("  Boot: fahre zur Startposition...")
-        boot_path = plan_and_show(list(cfg["tcp_pos"]), ori, seed=sim._null_space[3])
-        ok = sim.move_to(cfg["tcp_pos"], ori, speed=0.5, seed=sim._null_space[3], path=boot_path)
+        ok = preview_and_move(list(cfg["tcp_pos"]), ori, 0.5, seed=sim._null_space[3])
         if ok:
             print(f"  Boot: Startposition erreicht (Gebiss nicht geladen)")
         else:
             print("  Boot: Startposition nicht erreichbar – Arm bleibt an Neutralposition")
-        tcp_items = draw_tcp()
 
     print("── UR5e Demo ──────────────────────────────")
     print("Move:        'm x y z [rx ry rz]' (RRT, Default-Orientierung 0 0 0)")
@@ -256,7 +271,7 @@ def demo_simulation():
     current_start = None
     waypoint_idx = 0
     current_speed = 0.5
-    tcp_items = draw_tcp()
+    reset_overlay()
 
     while True:
         try:
@@ -271,18 +286,16 @@ def demo_simulation():
             break
         if cmd.action == "offset":
             sim.set_tool_offset(cmd.params["pos"])
-            clear_temps()
+            reset_overlay()
             continue
         if cmd.action == "reset" and sim._last_conf is not None:
-            clear_temps()
             sim._execute([sim._last_conf])
-            refresh_overlay()
+            reset_overlay()
             continue
         if cmd.action == "speed":
             current_speed = cmd.params["speed"]
             print(f"  Geschwindigkeit: {current_speed:.2f}")
-            clear_temps()
-            tcp_items = draw_tcp()
+            reset_overlay()
             continue
         if cmd.action == "render":
             sim._mirror._render_done.clear()
@@ -311,7 +324,7 @@ def demo_simulation():
                 sim._mirror._jaw_done.clear()
                 sim._mirror.send_message({"replace_jaw": {"folder": folder, "type": jaw_type, "pos": jpos, "euler": jcfg["jaw_euler_deg"]}})
                 sim._mirror._jaw_done.wait(timeout=10)
-            tcp_items = draw_tcp()
+            reset_overlay()
             continue
         if cmd.action == "start_pos":
             name = cmd.params["name"]
@@ -340,27 +353,15 @@ def demo_simulation():
                 print(f"  → approach {lbl}...")
                 _dump_pose(f"approach{lbl}", a["tcp_pos"], a_ori)
                 a_seed = None if a.get("use_current_seed") else start_seed
-                a_path = plan_and_show(a["tcp_pos"], a_ori, seed=a_seed)
-                if a_path is None:
+                ok = preview_and_move(a["tcp_pos"], a_ori, current_speed, seed=a_seed)
+                if not ok:
                     print(f"  ⛔ Approach {lbl} nicht erreichbar – start abgebrochen")
-                    tcp_items = draw_tcp()
-                    continue
-                moved = sim.move_to(a["tcp_pos"], a_ori, speed=current_speed, seed=a_seed, path=a_path)
-                if not moved:
-                    print(f"  ⛔ Approach {lbl} nicht erreichbar – start abgebrochen")
-                    tcp_items = draw_tcp()
                     continue
             print(f"  → fahre zu {name}-Start...")
             _dump_pose(f"final", cfg["tcp_pos"], tcp_ori)
-            final_path = plan_and_show(cfg["tcp_pos"], tcp_ori, seed=start_seed)
-            if final_path is None:
+            ok = preview_and_move(cfg["tcp_pos"], tcp_ori, current_speed, seed=start_seed)
+            if not ok:
                 print(f"  ⛔ {name}-Start nicht erreichbar – start abgebrochen")
-                tcp_items = draw_tcp()
-                continue
-            moved = sim.move_to(cfg["tcp_pos"], tcp_ori, speed=current_speed, seed=start_seed, path=final_path)
-            if not moved:
-                print(f"  ⛔ {name}-Start nicht erreichbar – start abgebrochen")
-                tcp_items = draw_tcp()
                 continue
             jpos = cfg["jaw_pos"]
             jeuler = [math.radians(v) for v in cfg["jaw_euler_deg"]]
@@ -372,12 +373,12 @@ def demo_simulation():
                 sim._mirror.send_current()
             print(f"  → jaw eingefuegt ({cfg['jaw_type']}, pos=({jpos[0]:.3f}, {jpos[1]:.3f}, {jpos[2]:.3f}))")
             current_start = name
-            waypoint_idx = 0
+            waypoint_idx = 10
             wps = _resolve_waypoints(cfg)
             print(f"  Waypoints: {len(wps)}")
             for i, wp in enumerate(wps):
                 print(f"    {i+1}: {wp.get('name') or wp.get('label', str(i+1))} ({wp['tcp_pos'][0]:.3f}, {wp['tcp_pos'][1]:.3f}, {wp['tcp_pos'][2]:.3f})")
-            tcp_items = draw_tcp()
+            reset_overlay()
             draw_waypoints()
             continue
         if cmd.action == "waypoint_next":
@@ -391,22 +392,18 @@ def demo_simulation():
                 continue
             steps = cmd.params["steps"]
             for s in range(steps):
-                if waypoint_idx >= len(wps):
+                if waypoint_idx + 1 >= len(wps):
                     print(f"  → Pfad-Ende ({len(wps)} Waypoints)")
                     break
+                waypoint_idx += 1
                 wp = wps[waypoint_idx]
                 lbl = wp.get("name") or wp.get("label", str(waypoint_idx + 1))
                 print(f"  → {current_start} {lbl} ({waypoint_idx+1}/{len(wps)})...")
                 wp_ori = [math.radians(v) for v in wp["tcp_ori_deg"]]
-                wp_path = plan_and_show(wp["tcp_pos"], wp_ori)
-                if wp_path is None:
+                ok = preview_and_move(wp["tcp_pos"], wp_ori, current_speed)
+                if not ok:
                     print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
-                else:
-                    moved = sim.move_to(wp["tcp_pos"], wp_ori, speed=current_speed, path=wp_path)
-                    if not moved:
-                        print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
-                waypoint_idx += 1
-            tcp_items = draw_tcp()
+            reset_overlay()
             continue
         if cmd.action == "waypoint_prev":
             if current_start is None:
@@ -427,53 +424,20 @@ def demo_simulation():
                 lbl = wp.get("name") or wp.get("label", str(waypoint_idx + 1))
                 print(f"  → {current_start} {lbl} ({waypoint_idx+1}/{len(wps)}) zurueck...")
                 wp_ori = [math.radians(v) for v in wp["tcp_ori_deg"]]
-                wp_path = plan_and_show(wp["tcp_pos"], wp_ori)
-                if wp_path is None:
+                ok = preview_and_move(wp["tcp_pos"], wp_ori, current_speed)
+                if not ok:
                     print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
-                else:
-                    moved = sim.move_to(wp["tcp_pos"], wp_ori, speed=current_speed, path=wp_path)
-                    if not moved:
-                        print(f"  ⛔ {current_start} {lbl} nicht erreichbar")
-            tcp_items = draw_tcp()
+            reset_overlay()
             continue
-
-        clear_temps()
 
         if cmd.action == "error":
             continue
         target_position = cmd.params["target_position"]
         target_orientation = cmd.params["target_orientation"]
 
-        tcp_pos, _ = sim.get_tcp_pose()
-
-        devnull_fd = os.open(os.devnull, os.O_WRONLY)
-        saved_fds = (os.dup(1), os.dup(2))
-        os.dup2(devnull_fd, 1), os.dup2(devnull_fd, 2)
-
-        _draw_crosshair(target_position, [1, 1, 0], items,
-                        f"({target_position[0]:.3f}, {target_position[1]:.3f}, {target_position[2]:.3f})")
-
-        probe_result = sim._probe_path(target_position, target_orientation)
-
-        os.dup2(saved_fds[0], 1), os.dup2(saved_fds[1], 2)
-        os.close(devnull_fd)
-
-        start_tcp, _, _, _, rrt_waypoints, plan_path = probe_result
-
-        target_pos, target_ori = draw_probe_preview(
-            rrt_waypoints, start_tcp, target_position, target_orientation,
-        )
-
-        try:
-            confirm = input("  Ausführen? [Y/n] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
+        result = preview_and_move(target_position, target_orientation, current_speed, confirm=True)
+        if result is None:
             break
-        ok = False
-        if confirm in ("", "y", "yes"):
-            ok = sim.move_to(target_pos, target_ori, speed=current_speed, path=plan_path)
-
-        clear_temps()
-        tcp_items = draw_tcp()
 
     if sim._mirror is not None:
         sim._mirror.close()
