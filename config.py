@@ -102,8 +102,16 @@ JOINTS = [
 # Echte Python-Funktion, kann frei angepasst werden. Sie wird je Startposition
 # ueber den Key 'generator' referenziert und berechnet Position UND Orientierung.
 #
-# Position (Parabel):   x = x0 + a*value^2,  y = value,  z = z
-#   value-laeuft kleinteilig von -y_max .. +y_max (verteilt auf n Punkte).
+# Position (power-Parabel): x = x0 + a*|value/y_max|^power,  y = value,  z = z
+#   - power : Kurvenform; 2 = flache x^2-Parabel, 4 = x^4 (flache Mitte,
+#             steile Enden, Gebissform), auch 3 oder andere Werte moeglich.
+#   - Die Renormierung (value/y_max) macht 'a' direkt zum x-Ausschlag an den
+#     aeussersten Wegpunkten (W0/W{n-1}): dort ist |value/y_max|^power = 1
+#     -> x = x0 + a, unabhaengig von power und y_max.
+#   - Gleiche Verteilung: Die n Wegpunkte werden NICHT gleichmaessig in 'value',
+#     sondern gleichmaessig nach Bogenlaenge entlang der Kurve verteilt
+#     (konstanter Abstand auf der Linie). Dadurch sammeln sich die Punkte nicht
+#     in der Mitte, sondern liegen gleichmaessig auf der Kurve.
 #
 # Orientierung: smoother Uebergang (Quaternion-Slerp) zwischen drei Ankern.
 #   ori_anchors = {"start": <euler>, "mid": <euler>, "end": <euler>}
@@ -145,6 +153,7 @@ def parabola_waypoints(cfg):
     x0 = float(p.get("x0", 0.0))
     a = float(p.get("a", 1.0))
     z = float(p.get("z", 0.0))
+    power = float(p.get("power", 4.0))
 
     anchors = cfg.get("ori_anchors", {})
     a_start = anchors.get("start", [90, 0, 0])
@@ -157,10 +166,53 @@ def parabola_waypoints(cfg):
     mid = n // 2
     last = n - 1
 
+    # Bogenlaenge entlang der Kurve numerisch berechnen: v -> kumulierte Laenge.
+    # x(v) = x0 + a*|v/y_max|^power, y(v) = v  -> ds/dv = sqrt((dx/dv)^2 + 1)
+    def dx_dv(v):
+        return a * power * abs(v / y_max) ** (power - 1) / y_max if y_max > 0 else 0.0
+
+    n_int = 4000
+    v_grid = []
+    L_grid = []
+    acc = 0.0
+    prev = -y_max
+    prev_x = dx_dv(prev)
+    v_grid.append(prev)
+    L_grid.append(0.0)
+    for k in range(1, n_int + 1):
+        v = -y_max + 2 * y_max * k / n_int
+        d = dx_dv(v)
+        acc += math.sqrt(((prev_x + d) / 2.0) ** 2 + 1.0) * (v - prev)
+        prev = v
+        prev_x = d
+        v_grid.append(v)
+        L_grid.append(acc)
+    L_total = acc
+
+    if n > 1 and L_total > 0:
+        values = []
+        for i in range(n):
+            target = L_total * i / (n - 1)
+            # invertiere L(v)=target per linearer Interpolation (L monoton)
+            for k in range(1, len(L_grid)):
+                if L_grid[k] >= target:
+                    v0, v1 = v_grid[k - 1], v_grid[k]
+                    l0, l1 = L_grid[k - 1], L_grid[k]
+                    if l1 > l0:
+                        f = (target - l0) / (l1 - l0)
+                    else:
+                        f = 0.0
+                    values.append(v0 + f * (v1 - v0))
+                    break
+            else:
+                values.append(v_grid[-1])
+    else:
+        values = [0.0] * n
+
     wps = []
     for idx in range(n):
-        value = -y_max + 2 * y_max * idx / (n - 1) if n > 1 else 0.0
-        x = x0 + a * value * value
+        value = values[idx]
+        x = x0 + a * abs(value / y_max) ** power if y_max > 0 else x0
         if idx <= mid:
             t = idx / mid if mid > 0 else 0.0
             q = _quat_slerp(q_start, q_mid, t)
@@ -190,7 +242,7 @@ START_POSITIONS = {
         "jaw_folder": 1,
         "jaw_type":  "lower",
         "generator": parabola_waypoints,
-        "parabola":  {"x0": 0.615, "a": 35, "z": 0.295, "n": 21, "y_max": 0.037},
+        "parabola":  {"x0": 0.615, "a": 0.046, "z": 0.295, "n": 21, "y_max": 0.037, "power": 4},
         "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
     },
     "aussen2": {
@@ -204,7 +256,7 @@ START_POSITIONS = {
         "jaw_folder": 1,
         "jaw_type":  "lower",
         "generator": parabola_waypoints,
-        "parabola":  {"x0": 0.615, "a": 18.5, "z": 0.295, "n": 20, "y_max": 0.05},
+        "parabola":  {"x0": 0.615, "a": 0.0463, "z": 0.295, "n": 20, "y_max": 0.05, "power": 4},
         "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
     },
     "oben": {
