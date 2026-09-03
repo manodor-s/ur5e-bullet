@@ -44,7 +44,7 @@ CAMERA_DISPLAY_M = 0.2
 # Seitlicher Versatz der beiden Kameras (Stereo-Baseline) relativ zum TCP,
 # in Scanner-lokalen Koordinaten (Y-Achse), in Meter (S=1 -> 1 BU).
 # Jede Kamera wird um +/- CAMERA_LATERAL_OFFSET quer zur Blickrichtung versetzt.
-CAMERA_LATERAL_OFFSET = 0.005
+CAMERA_LATERAL_OFFSET = 0.0025
 
 # ── Licht ──
 LIGHT_POWER = 0.001
@@ -96,6 +96,12 @@ VIEW_STICK_LENGTH = 0.05
 VIEW_STICK_RADIUS = 0.0015
 VIEW_STICK_COLOR = [1.0, 0.3, 0.0, 1.0]
 
+# ── Look-Target (Blickachse-Ziel) ──
+# Optional zusaetzlicher Zielpunkt fuer die Blickachse (Default: Gebiss-Mittelpunkt).
+# Wird als grusnes, kollisionsfreies Kuegelchen an der Waypoint-Ebenen-Hoehe dargestellt.
+LOOK_TARGET_RADIUS = 0.008
+LOOK_TARGET_COLOR = [0.1, 1.0, 0.3, 0.95]
+
 # ── Joint Limits (Winkel in Grad) ──
 # Ein Eintrag pro steuerbarem Gelenk, Reihenfolge = Joint-Reihenfolge
 # (shoulder_pan, shoulder_lift, elbow, wrist_1, wrist_2, wrist_3).
@@ -135,6 +141,7 @@ START_POSITIONS = {
         "parabola":  {"x0": 0.615, "a": 0.046, "z": 0.295, "n": 21, "y_max": 0.037, "power": 4},
         "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
         "look_at_jaw": True,
+        "look_target": [0.661, 0.0],
     },
     "aussen2": {
         "tcp_pos":  [0.615, 0, 0.295],
@@ -150,6 +157,7 @@ START_POSITIONS = {
         "parabola":  {"x0": 0.615, "a": 0.0463, "z": 0.295, "n": 20, "y_max": 0.05, "power": 4},
         "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
         "look_at_jaw": True,
+        "look_target": [0.65, 0.0],
     },
     "oben": {
         "tcp_pos":  [0.85, 0.0, 0.38],

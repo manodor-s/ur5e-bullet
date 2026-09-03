@@ -25,6 +25,8 @@ DRAW_VIEW_STICK = _cfg_mod.DRAW_VIEW_STICK
 VIEW_STICK_LENGTH = _cfg_mod.VIEW_STICK_LENGTH
 VIEW_STICK_RADIUS = _cfg_mod.VIEW_STICK_RADIUS
 VIEW_STICK_COLOR = _cfg_mod.VIEW_STICK_COLOR
+LOOK_TARGET_RADIUS = _cfg_mod.LOOK_TARGET_RADIUS
+LOOK_TARGET_COLOR = _cfg_mod.LOOK_TARGET_COLOR
 
 
 def _draw_crosshair(pos, color, items, label=None):
@@ -155,6 +157,15 @@ def _draw_waypoint_bodies(wps):
     return bodies
 
 
+def _draw_look_target_body(pos):
+    """Persistenter, kollisionsfreier Marker fuer das Blickachse-Ziel (Look-Target).
+    Wie die Waypoints: nur visuelle Geometrie, kollidiert nie mit dem Roboter."""
+    vis = pybullet.createVisualShape(
+        pybullet.GEOM_SPHERE, radius=LOOK_TARGET_RADIUS, rgbaColor=LOOK_TARGET_COLOR,
+    )
+    return pybullet.createMultiBody(baseVisualShapeIndex=vis, basePosition=pos)
+
+
 def _resolve_waypoints(cfg):
     """Erzeugt die Liste der Waypoint-Dicts einer Startposition.
 
@@ -227,18 +238,37 @@ def demo_simulation():
             pybullet.resetBasePositionAndOrientation(view_stick_id, center, oq)
 
     def draw_waypoints():
+        nonlocal look_target_body_id
         for b in waypoint_bodies:
             try:
                 pybullet.removeBody(b)
             except Exception:
                 pass
         waypoint_bodies.clear()
+        if look_target_body_id is not None:
+            try:
+                pybullet.removeBody(look_target_body_id)
+            except Exception:
+                pass
+            look_target_body_id = None
         if current_start is None:
             return
-        wps = _resolve_waypoints(START_POSITIONS[current_start])
+        cfg = START_POSITIONS[current_start]
+        wps = _resolve_waypoints(cfg)
         if not wps:
             return
         waypoint_bodies.extend(_draw_waypoint_bodies(wps))
+        plane_z = wps[0]["tcp_pos"][2]
+        lt = cfg.get("look_target")
+        jaw = cfg.get("jaw_pos")
+        if lt is not None:
+            target = [lt[0], lt[1], plane_z]
+        elif jaw is not None:
+            target = [jaw[0], jaw[1], plane_z]
+        else:
+            target = None
+        if target is not None:
+            look_target_body_id = _draw_look_target_body(target)
 
     def reset_overlay():
         """Entfernt ALLE Debug-Items (auch verwaiste "Geister") via
@@ -300,6 +330,7 @@ def demo_simulation():
 
     items = []
     waypoint_bodies = []
+    look_target_body_id = None
     tcp_items = []
     view_stick_id = None
     current_start = None

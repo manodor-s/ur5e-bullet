@@ -47,10 +47,18 @@ def parabola_waypoints(cfg):
     power = float(p.get("power", 4.0))
 
     # Per-Startposition schaltbar: Kamera-Blickachse (TCP-lokales -Z) auf den
-    # Gebiss-Mittelpunkt in der Hoehe der Waypoint-Ebene richten (Blickachse
-    # horizontal in der Ebene). Default an, kann je Startposition gesetzt werden.
+    # Look-Target-Punkt in der Hoehe der Waypoint-Ebene richten (Blickachse
+    # horizontal in der Ebene). Ziel = look_target (x,y) oder Default Gebiss-Mitte.
+    # Default an, kann je Startposition gesetzt werden.
     look_at_jaw = cfg.get("look_at_jaw", True)
+    lt = cfg.get("look_target")
     jaw = cfg.get("jaw_pos")
+    if lt is not None:
+        target_xy = [lt[0], lt[1]]
+    elif jaw is not None:
+        target_xy = [jaw[0], jaw[1]]
+    else:
+        target_xy = None
 
     anchors = cfg.get("ori_anchors", {})
     a_start = anchors.get("start", [90, 0, 0])
@@ -117,9 +125,9 @@ def parabola_waypoints(cfg):
             t = (idx - mid) / (last - mid) if last > mid else 1.0
             q = _quat_slerp(q_mid, q_end, t)
 
-        if look_at_jaw and jaw is not None:
+        if look_at_jaw and target_xy is not None:
             wp_pos = [x, value, z]
-            d = [jaw[0] - wp_pos[0], jaw[1] - wp_pos[1], 0.0]
+            d = [target_xy[0] - wp_pos[0], target_xy[1] - wp_pos[1], 0.0]
             dn = math.sqrt(sum(c * c for c in d))
             if dn > 1e-9:
                 d = [c / dn for c in d]
