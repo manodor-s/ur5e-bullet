@@ -87,6 +87,11 @@ GHOST_COLOR = [0.2, 0.8, 1.0, 0.4]
 PREVIEW_PAUSE = 0.6
 WAYPOINT_MARKER_RADIUS = 0.001
 
+# ── Viewport ──
+# Beim Blender-Start den 3D-Viewport an scene.camera (ScannerCamera_R) heften,
+# sodass er wie ein Sucher der Kamera durch die Kamera blickt und der Bewegung folgt.
+ATTACH_VIEWPORT_TO_CAMERA = True
+
 # ── Debug: Sichtachse (Stab vom TCP) ──
 # Zeichnet einen kollisionsfreien Stab vom TCP aus in Richtung der Kamera-
 # Blickachse (Kandidat: TCP-lokales -Z), um die TCP->Kamera-Orientierung
@@ -126,22 +131,39 @@ JOINTS = [
 
 
 START_POSITIONS = {
-    "aussen1": {
-        "tcp_pos":  [0.615, 0, 0.295],
+    "aussen1low": {
+        "tcp_pos":  [0.616, 0, 0.296],
         "tcp_ori_deg": [180, 90, 0],
         "approach": [
             {"tcp_pos": [0.85, 0, 0.38], "tcp_ori_deg": [0, 0, 0], "label": "1", "use_current_seed": False},
-            {"tcp_pos": [0.615, 0, 0.295], "tcp_ori_deg": [0, 90, 0], "label": "2", "use_current_seed": True},
+            {"tcp_pos": [0.616, 0, 0.296], "tcp_ori_deg": [0, 90, 0], "label": "2", "use_current_seed": True},
         ],
         "jaw_pos":  [0.65, 0, 0.3],
         "jaw_euler_deg": [0, 0, 90],
         "jaw_folder": 1,
         "jaw_type":  "lower",
         "generator": parabola_waypoints,
-        "parabola":  {"x0": 0.615, "a": 0.046, "z": 0.295, "n": 21, "y_max": 0.037, "power": 4},
+        "parabola":  {"x0": 0.616, "a": 0.047, "z": 0.296, "n": 21, "y_max": 0.037, "power": 4},
         "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
         "look_at_jaw": True,
-        "look_target": [0.661, 0.0],
+        "look_target": [0.662, 0.0],
+    },
+    "aussen2low": {
+        "tcp_pos":  [0.619, 0, 0.297],
+        "tcp_ori_deg": [180, 90, 0],
+        "approach": [
+            {"tcp_pos": [0.85, 0, 0.38], "tcp_ori_deg": [0, 0, 0], "label": "1", "use_current_seed": False},
+            {"tcp_pos": [0.619, 0, 0.297], "tcp_ori_deg": [0, 90, 0], "label": "2", "use_current_seed": True},
+        ],
+        "jaw_pos":  [0.65, 0, 0.3],
+        "jaw_euler_deg": [0, 0, 90],
+        "jaw_folder": 2,
+        "jaw_type":  "lower",
+        "generator": parabola_waypoints,
+        "parabola":  {"x0": 0.619, "a": 0.05, "z": 0.297, "n": 21, "y_max": 0.039, "power": 4}, #37
+        "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
+        "look_at_jaw": True,
+        "look_target": [0.662, 0.0],
     },
     "aussen2": {
         "tcp_pos":  [0.615, 0, 0.295],
@@ -154,20 +176,24 @@ START_POSITIONS = {
         "jaw_folder": 1,
         "jaw_type":  "lower",
         "generator": parabola_waypoints,
-        "parabola":  {"x0": 0.615, "a": 0.0463, "z": 0.295, "n": 20, "y_max": 0.05, "power": 4},
+        "parabola":  {"x0": 0.615, "a": 0.0463, "z": 0.295, "n": 21, "y_max": 0.05, "power": 4},
         "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
         "look_at_jaw": True,
         "look_target": [0.65, 0.0],
     },
     "oben": {
-        "tcp_pos":  [0.85, 0.0, 0.38],
-        "tcp_ori_deg": [0, 180, 90],
+        "tcp_pos":  [0.8265, 0.0, 0.31],
+        "tcp_ori_deg": [0, 0, 0],
         "approach": [],
         "jaw_pos":  [0.85, 0, 0.3],
         "jaw_euler_deg": [0, 0, 90],
         "jaw_folder": 1,
         "jaw_type":  "lower",
-        "waypoints": [],
+        "generator": parabola_waypoints,
+        "parabola":  {"x0": 0.8265, "a": 0.045, "z": 0.31, "n": 21, "y_max": 0.03, "power": 2},
+        "ori_anchors": {"start": [0 , 0, 0], "mid": [0, 0, 0], "end": [0, 0, 0]},
+        "look_at_jaw": False,
+        "look_target": [0.65, 0.0],
     },
     "innen": {
         "tcp_pos":  [0.78, -0.05, 0.29],

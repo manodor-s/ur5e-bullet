@@ -8,7 +8,7 @@ import bpy
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rig
 sys.path.insert(0, rig.ROOT)
-from config import SOCKET_BUFFER, SOCKET_POLL_INTERVAL
+from config import SOCKET_BUFFER, SOCKET_POLL_INTERVAL, ATTACH_VIEWPORT_TO_CAMERA
 
 CONTROL_JOINTS = [
     "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
@@ -46,6 +46,10 @@ def build_scene():
             for space in area.spaces:
                 if space.type == "VIEW_3D":
                     space.shading.type = "SOLID"
+                    if ATTACH_VIEWPORT_TO_CAMERA:
+                        # Viewport an scene.camera (ScannerCamera_R) heften,
+                        # folgt der Roboter-Kamera-Bewegung wie ein Sucher.
+                        space.region_3d.view_perspective = "CAMERA"
     print("[mirror] Szene aufgebaut")
 
 
