@@ -20,5 +20,5 @@ packages = [{include = "ur5e_bullet", from = "src"}]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
-[tool.poetry.scripts]
+[project.scripts]
 ur5e = "ur5e_bullet.__init__:demo_simulation"
