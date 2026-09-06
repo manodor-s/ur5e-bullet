@@ -551,6 +551,3 @@ def demo_simulation():
 
     if sim._mirror is not None:
         sim._mirror.close()
-
-if __name__ == "__main__":
-    demo_simulation()
