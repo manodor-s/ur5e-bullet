@@ -92,6 +92,14 @@ WAYPOINT_MARKER_RADIUS = 0.001
 # sodass er wie ein Sucher der Kamera durch die Kamera blickt und der Bewegung folgt.
 ATTACH_VIEWPORT_TO_CAMERA = True
 
+# ── Pybullet-View (GUI-Kamera: Startposition + Startwinkel) ──
+# Setzt die pybullet-Orbit-Kamera beim Start. "Startposition" = cameraTargetPosition
+# (worauf geschaut wird) + cameraDistance; "Startwinkel" = yaw + pitch.
+PB_CAMERA_DISTANCE   = 1.0
+PB_CAMERA_YAW        = 70.0
+PB_CAMERA_PITCH      = -25.0
+PB_CAMERA_TARGET_POS = [0.6, 0.0, 0.4]
+
 # ── Debug: Sichtachse (Stab vom TCP) ──
 # Zeichnet einen kollisionsfreien Stab vom TCP aus in Richtung der Kamera-
 # Blickachse (Kandidat: TCP-lokales -Z), um die TCP->Kamera-Orientierung
@@ -147,6 +155,7 @@ START_POSITIONS = {
         "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
         "look_at_jaw": True,
         "look_target": [0.662, 0.0],
+        "view": {"apply": True, "distance": 0.1, "yaw": 90.0, "pitch": -89.0, "target": [0.65, 0.0, 0.3]},
     },
     "aussen2low": {
         "tcp_pos":  [0.619, 0, 0.297],
@@ -164,6 +173,7 @@ START_POSITIONS = {
         "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
         "look_at_jaw": True,
         "look_target": [0.662, 0.0],
+        "view": {"apply": True, "distance": 1.0, "yaw": 90.0, "pitch": -25.0, "target": [0.66, 0.0, 0.35]},
     },
     "aussen2": {
         "tcp_pos":  [0.615, 0, 0.295],
@@ -180,6 +190,7 @@ START_POSITIONS = {
         "ori_anchors": {"start": [90, 0, 0], "mid": [180, 90, 0], "end": [-90, 0, 0]},
         "look_at_jaw": True,
         "look_target": [0.65, 0.0],
+        "view": {"apply": True, "distance": 1.0, "yaw": 90.0, "pitch": -25.0, "target": [0.65, 0.0, 0.35]},
     },
     "oben": {
         "tcp_pos":  [0.8265, 0.0, 0.31],
@@ -194,6 +205,7 @@ START_POSITIONS = {
         "ori_anchors": {"start": [0 , 0, 0], "mid": [0, 0, 0], "end": [0, 0, 0]},
         "look_at_jaw": False,
         "look_target": [0.65, 0.0],
+        "view": {"apply": True, "distance": 1.0, "yaw": 0.0, "pitch": -25.0, "target": [0.85, 0.0, 0.35]},
     },
     "innen": {
         "tcp_pos":  [0.78, -0.05, 0.29],

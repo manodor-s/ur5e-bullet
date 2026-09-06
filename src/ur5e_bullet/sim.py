@@ -37,6 +37,10 @@ RRT_SEED = _cfg_mod.RRT_SEED
 JOINT_LOWER_LIMITS = [math.radians(j["lower_deg"]) for j in _cfg_mod.JOINTS]
 JOINT_UPPER_LIMITS = [math.radians(j["upper_deg"]) for j in _cfg_mod.JOINTS]
 JOINT_REST_POSES = [math.radians(j["rest_deg"]) for j in _cfg_mod.JOINTS]
+PB_CAMERA_DISTANCE = _cfg_mod.PB_CAMERA_DISTANCE
+PB_CAMERA_YAW = _cfg_mod.PB_CAMERA_YAW
+PB_CAMERA_PITCH = _cfg_mod.PB_CAMERA_PITCH
+PB_CAMERA_TARGET_POS = _cfg_mod.PB_CAMERA_TARGET_POS
 
 
 class UR5Sim():
@@ -45,6 +49,10 @@ class UR5Sim():
         pybullet.connect(pybullet.GUI if gui else pybullet.DIRECT)
         pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_GUI, 0)
         pybullet.setRealTimeSimulation(True)
+        pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_RENDERING, 0)
+        pybullet.resetDebugVisualizerCamera(
+            PB_CAMERA_DISTANCE, PB_CAMERA_YAW, PB_CAMERA_PITCH, PB_CAMERA_TARGET_POS)
+        pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_RENDERING, 1)
 
         self.end_effector_index = 7
         self.ur5 = self.load_robot()

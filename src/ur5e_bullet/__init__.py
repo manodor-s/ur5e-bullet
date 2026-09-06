@@ -27,6 +27,10 @@ VIEW_STICK_RADIUS = _cfg_mod.VIEW_STICK_RADIUS
 VIEW_STICK_COLOR = _cfg_mod.VIEW_STICK_COLOR
 LOOK_TARGET_RADIUS = _cfg_mod.LOOK_TARGET_RADIUS
 LOOK_TARGET_COLOR = _cfg_mod.LOOK_TARGET_COLOR
+PB_CAMERA_DISTANCE = _cfg_mod.PB_CAMERA_DISTANCE
+PB_CAMERA_YAW = _cfg_mod.PB_CAMERA_YAW
+PB_CAMERA_PITCH = _cfg_mod.PB_CAMERA_PITCH
+PB_CAMERA_TARGET_POS = _cfg_mod.PB_CAMERA_TARGET_POS
 
 
 def _draw_crosshair(pos, color, items, label=None):
@@ -270,6 +274,22 @@ def demo_simulation():
         if target is not None:
             look_target_body_id = _draw_look_target_body(target)
 
+    def _set_view(cfg):
+        """Setzt die pybullet-Orbit-Kamera auf die Startposition/den Startwinkel
+        der Startposition (cfg['view']). Fehlt 'view' oder 'apply' ist False,
+        wird die Kamera nicht beruehrt (Global aus sim.py gilt dann)."""
+        v = cfg.get("view")
+        if not v or not v.get("apply", True):
+            return
+        pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_RENDERING, 0)
+        pybullet.resetDebugVisualizerCamera(
+            v.get("distance", PB_CAMERA_DISTANCE),
+            v.get("yaw", PB_CAMERA_YAW),
+            v.get("pitch", PB_CAMERA_PITCH),
+            list(v.get("target", PB_CAMERA_TARGET_POS)),
+        )
+        pybullet.configureDebugVisualizer(pybullet.COV_ENABLE_RENDERING, 1)
+
     def reset_overlay():
         """Entfernt ALLE Debug-Items (auch verwaiste "Geister") via
         removeAllUserDebugItems und zeichnet das TCP-Crosshair neu.
@@ -345,6 +365,7 @@ def demo_simulation():
             print(f"  Boot: Startposition erreicht (Gebiss nicht geladen)")
         else:
             print("  Boot: Startposition nicht erreichbar – Arm bleibt an Neutralposition")
+        _set_view(cfg)
 
     print("── UR5e Demo ──────────────────────────────")
     print("Move:        'm x y z [rx ry rz]' (RRT, Default-Orientierung 0 0 0)")
@@ -466,6 +487,7 @@ def demo_simulation():
             print(f"  Waypoints: {len(wps)}")
             for i, wp in enumerate(wps):
                 print(f"    {i+1}: {wp.get('name') or wp.get('label', str(i+1))} ({wp['tcp_pos'][0]:.3f}, {wp['tcp_pos'][1]:.3f}, {wp['tcp_pos'][2]:.3f})")
+            _set_view(cfg)
             reset_overlay()
             draw_waypoints()
             continue
